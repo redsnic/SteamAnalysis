@@ -1,4 +1,4 @@
-﻿---
+---
 title: "Kaggle Steam Datasets"
 author: "Nicolò Rossi"
 date: "08/08/2020"
@@ -8,10 +8,11 @@ output:
   pdf_document: default
 ---
 
-## Introduzione
+# Introduzione
 
-In questo documento viene mostrata l'analisi di dati estratti dalla piattaforma per videogiochi "Steam". 
-I dataset utilizzati sono disponibili pubblicamente e sono stati ottenuti dal sito [kaggle](https://www.kaggle.com)
+In questo documento viene mostrata l'analisi di dati estratti dalla piattaforma per videogiochi "Steam" e di come sia possibile usarla
+per realizzare un sistema per il consiglio di nuovi giochi da giocare. 
+I dataset utilizzati sono disponibili pubblicamente e sono stati ottenuti dal sito [Kaggle](https://www.kaggle.com).
 
 Steam è la più grande piattafroma per giocare, pubblicare ed acquistare giochi per computer.
 Attiva dal 2003, conta milioni di utenti attivi e migliaia di titoli disponibili. E' amministrata dalla Valve Corporation, società che
@@ -35,7 +36,7 @@ oppure "dei giochi" ed il secondo usando i nomi "200k" o "dataset dei giocatori"
 
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, fig.align='center')
+knitr::opts_chunk$set(echo = TRUE, fig.align='center', message = FALSE, warning = FALSE)
 ```
 
 ```{r, message=FALSE}
@@ -67,13 +68,14 @@ sourceCpp("bitcorr.cpp")
 ```
 
 
-## Dati "grezzi"
+# Dati "grezzi"
 
 In questa sezione verranno presentati i dataset utilizzati per l'analisi dati, così come essi sono reperibili dal Web.
 
 ## Dati sui giocatori
 
-Per prima cosa consideriamo il dataset riguardante 200.000 operazioni compiute da un campione di giocatori. Il dataset è stato caricato su Kaggle tre anni fa, ma avremo modo di individuare un intervallo più specifico e prenderemo quindi in considerazione il problema della "datazione" di questi dati.
+Per prima cosa consideriamo il dataset riguardante 200.000 operazioni compiute da un campione di giocatori. Il dataset è stato caricato su Kaggle tre anni fa, ma avremo modo di individuare un intervallo più specifico per la sua creazione e prenderemo quindi in 
+considerazione il problema della "datazione" di questi dati.
 
 Il dataset è inizialmente strutturato come segue:
 
@@ -226,7 +228,7 @@ In questa sezione risponderemo ad alcune semplici domande che possiamo possiamo 
 ## Considerazioni sul tempo di gioco 
 
 In questa sottosezione consideriamo il dataset sulle attività di gioco dei giocatori, in particolare ci chiediamo quali siano i giochi più giocati nel campione analizzato e
-come questi siano distribuiti:
+come questi siano distribuiti.
 
 Per prima cosa quindi ordiniamo i giochi per tempo assoluto e cumulativo di gioco: 
 
@@ -423,7 +425,9 @@ figures.players.avgTime <-
 figures.players.avgTime
 ```
 
-mostrando quindi una tendenza all'aumento del tempo medio di gioco a seconda del numero di giocatori. Ritengo questo risultato particolarmente interessante, in quanto
+mostrando quindi una tendenza all'aumento del tempo medio di gioco a seconda del numero di giocatori.
+
+> Ritengo questo risultato particolarmente interessante, in quanto
 si potrebbe effettivamente pensare che i giochi con più giocatori tendano ad attirare anche molte persone con scarso interesse che successivamente andrebbero ad 
 abbandonare il gioco, facendo diminuire così notevolmente la media. Potrebbe essere di interesse valutare se questo sia il trend anche nei giochi per dispositivi 
 mobili (android/iOS) dove il mercato e gli utenti sono solitamente molto diversi.
@@ -550,7 +554,7 @@ E' interessante notare come, dopo "Civilization V", i due seguiti "beyond earth"
 questi siano casi del cosiddetto fenomeno del "Review Bombing", per il quale un gioco viene bersagliato in modo sistematico da valutazioni negative da parte degli utenti.
 Questo può accadere per molti motivi diversi: non raggiungimento delle aspettative, politiche aziendali non accettate dai fan, problemi dal punto di vista dell'implementazione
 del gioco (per bug o ottimizzazione), eccetera ... . Per quanto questa pratica possa sembrare scorretta in quanto valuta il gioco in un determinato contesto e momento del suo
-ciclo di vita, è in realtà l'unica mossa da parte degli appassionati per poter far effettivamente sentire la loro opinione. La stampa specializzata che si occupa invece
+ciclo di vita, è in realtà una delle poche mosse da parte degli appassionati per poter far effettivamente sentire la loro opinione. La stampa specializzata che si occupa invece
 della recensione sistematica dei giochi in uscita normalmente non è affetta da queste situazioni e valuta i diversi giochi con il proprio metro di giudizio normale.
 Ovviamente, anche fra la stampa specializzata, possono esserci opinioni diverse nella valutazione dei giochi in quanto questi sono prodotti con una componente 
 artistica e dunque prettamente soggettiva, similmente a quanto accade normalmente ad esempio in ambito cinematografico. 
