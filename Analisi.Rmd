@@ -1,0 +1,2236 @@
+---
+title: "Kaggle Steam Datasets"
+author: "Nicolò Rossi"
+date: "xx/yy/20zz"
+output:
+  html_document: 
+    df_print: paged
+  pdf_document: default
+---
+
+## Introduzione
+
+In questo documento viene mostrata l'analisi di dati estratti dalla piattaforma per videogiochi "Steam". 
+I dataset utilizzati sono disponibili pubblicamente e sono stati ottenuti dal sito [kaggle](https://www.kaggle.com)
+
+Steam è la più grande piattafroma per giocare, pubblicare ed acquistare giochi per computer.
+Attiva dal 2003, conta milioni di utenti attivi e migliaia di titoli disponibili. E' amministrata dalla Valve Corporation, socetà che
+si occupa e si è occupata direttamente dello sviluppo di diversi celebri giochi.  
+
+Per rendere la lettura più interessante e per aggiungere profondità alle tematiche trattate, a volte inserirò dei commenti di carattere personale
+o che esulano dagli argomenti principali analizzati nella relazione. Per evitare ambiguità, quando ciò accade, il testo viene inserito in una nota, in questo modo:
+
+> Questa è una nota
+
+## Dataset utilizzati
+
+Sono considerati i seguenti due dataset:
+
+* [Steam Store Games (Clean dataset)](https://www.kaggle.com/nikdavis/steam-store-games)
+* [Steam Video Games](https://www.kaggle.com/tamber/steam-video-games)
+
+contenenti rispettivamente le informazioni relative ai comportamenti di gioco e di acquisto di 200.000 videogiocatori e 
+quelle sui giochi disponibili sulla piattaforma Steam. Nel corso di questa relazione per semplicità citeremo il primo chiamandolo "dataset del 2019"
+oppure "dei giochi" ed il secondo usando i nomi "200k" o "dataset dei giocatori".
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align='center')
+```
+
+```{r, message=FALSE}
+# lista delle librerie utilzzate
+library("Rcpp")
+library("sets")
+library("rmarkdown")
+library("circlize")
+library('knitr')
+library("plyr")
+library('dplyr')
+library('ggplot2')
+library('igraph')
+library("purrr")
+library("ggraph")
+library("tidyr")
+library("tidygraph")
+library("rlang")
+library("netrankr")
+library("corrplot")
+library("lpSolve")
+library("lpSolveAPI")
+library("Rglpk")
+library("Rfast")
+# sorgenti extra
+source("Utils.R")
+sourceCpp("NetSimilarity.cpp")
+sourceCpp("bitcorr.cpp")
+```
+
+
+## Dati "grezzi"
+
+In questa sezione verranno presntati i dataset utilizzati per l'analisi dati, così come essi sono reperibili dal Web.
+
+## Dati sui giocatori
+
+Per prima cosa consideriamo il dataset riguardante 200.000 operazioni compiute dai un campione di giocatori. Il dataset è stato caricato su Kaggle tre anni fa, ma avremo modo di individuare un intervallo più specifico e prenderemo quindi in considerazione il problema della "datazione" di questi dati.
+
+Il dataset è inizialmente strutturato come segue:
+
+```{r}
+# lettura
+players.data <- read.csv(
+    "./data/steam-200k.csv",
+    header=FALSE)[, -5]
+colnames(players.data) <- c("player", "name", "activity", "time")
+# rimozione punteggiatura
+players.data <- clean.text(players.data, name, "[-.:™®'’]")
+players.data 
+```
+
+Il tempo viene espresso in ore di gioco ed ha significato solo quando associato all'attività "play".
+
+I seguenti semplici conteggi ci consentono di comprendere la reale dimensione del campionamento effettuato per realizzare questa collezione di dati:
+
+Numero di giocatori considerati:
+
+```{r}
+number.of.classes(players.data, player)
+```
+
+Numero di giochi giocati:
+
+```{r}
+number.of.classes(players.data, name)
+```
+
+Attività di acquisto:
+
+```{r}
+count.selected.lines(players.data, activity == "purchase" )
+```
+
+Attività di gioco:
+
+```{r}
+count.selected.lines(players.data, activity == "play" )
+```
+
+Questa ripartizione non equa delle attività di gioco e acquisto non è semplicemente dovuta al caso in quanto è invece particolarmente frequente acquistare giochi e non giocarli; è il cosidetto "problema del backlog".
+
+## Informazioni sui giochi
+
+Il dataset con le informazioni aggiuntive sugli specifici giochi è più ricco e completo rispetto a quello precedente, che invece si limita a un campionamento su un relativamente piccolo numero di giocatori. In esso sono racchiuse tutte le informazioni riguardanti i giochi pubblicati sulla piattaforma Steam fino a Maggio 2019 e ad ogni gioco vengono associati i seguenti attributi:
+
+* **appid**: identificativo unico del gioco, non essendo presente nell'altro dataset non ci è molto utile
+* **name**: nome del gioco
+* **release_date**: data di uscita
+* **english**: se supporta la lingua inglese
+* **developer**: casa sviluppatrice (a volte possono essere più di una, in quel caso le consideriamo come un unico team di sviluppo separato)
+* **publisher**: chi ha pubblicato il gioco
+* **platforms**: piattaforme su cui il gioco è disponibile (Windows, Mac e Linux)
+* **required_age**: Indica l'età consigliata per il gioco (se pubblicata)
+* **categories**: Lista delle categorie (indicate da Steam) che descrivono alcune caratteristiche di gioco
+* **genres**: Lista che descrive la tipologia di gioco
+* **steamspy_tags**: Ulteriori tag, più dettagliati
+* **achievements**: Indica se il gioco supporta il sistema a obiettivi offerto da Steam (e con quanti)
+* **positive_ratings**: Rating positivi per il gioco inviati dagli utenti
+* **negative_ratings**: Rating negativi per il gioco inviati dagli utanti
+* **average_playtime**: tempo medio di gioco 
+* **median_playtime**: tempo mediano di gioco
+* **owners**: indica un intervallo in cui ricade il numero di persone che posseggono il gioco
+* **price**: Prezzo di listino del prodotto
+
+Il dataset offre quindi molte informazioni ma non tutti gli attributi risultano egualmente affidabili; in particolare si sono osservate delle discrepanze molto 
+significative nel calcolo dei tempi di gioco, per cui si è deciso di escludere questi dati dall'analisi e di utilizzare, quando possibile, le informazioni presenti
+nel dataset dei giocatori, considerato in precedenza.
+
+> Il sistema degli *achievements* è stato introdotto nel 2005 da Microsoft per la sua piattaforma Xbox Live e si basa sul proporre sfide con 
+diversa difficoltà che siano comparabili fra i diversi giochi presenti sulla stessa piattaforma. Lo scopo è quello di aumentare la longevità 
+dei giochi fornendo sfide che premino il giocatore quando completate e creino leaderboards virtuali per aumentare la competizione fra i 
+diversi giocatori. Dato il successo di questo sistema, in breve tempo diverse compagnie come Sony, EA, Valve e Ubisoft, hanno 
+introdotto delle loro versioni degli achievement sulle loro piattaforme con modalità molto simili a quelle proposte da Microsoft.
+Il concetto di "Gamification" che viene ora proposto in molti ambiti estenri al modo dei videogiochi, come l'e-learning, 
+molto spesso presenta elementi analoghi a quelli degli achievement.
+
+Questa è, ad esempio, una porzione di questo dataset:
+
+```{r}
+games.data <- read.csv(
+    "./data/steam.csv",
+    colClasses = c("numeric", "character", "character", "factor", "factor", "factor", 
+                   "character", "factor", "character", "character", "character", "factor", 
+                   "integer", "integer", "numeric", "numeric", "factor", "numeric"))
+
+# semplifico i nomi per poter effettuare il join con l'altro dataset 
+games.data <- clean.text(games.data, name, "[-.:™®'’]")
+games.data  
+```
+
+Per un totale di:
+
+```{r}
+nrow(games.data)
+```
+
+giochi diversi.
+
+## Rendere i dataset Tidy
+
+Consideriamo dapprima il dataset dei giochi presenti su Steam. Per evitare un incremento sostanziale nella dimensione del dataset manteniamo temporaneamente
+i campi lista ma li trasformiamo in vere e proprie liste R (anzichè del testo spaziato da ";"). Questo ci consentirà di usare *dplyr* nelle fasi successive 
+in modo molto semplice per poter operare sui suddetti campi.
+
+```{r}
+# trasformo le liste separate da ; in liste R 
+games.data <- games.data %>% mutate(platforms = strsplit(platforms, ";") ) %>%
+    mutate(categories = strsplit(categories, ";") ) %>%
+    mutate(genres = strsplit(genres, ";") ) %>%
+    mutate(steamspy_tags = strsplit(steamspy_tags, ";") )
+```
+
+Interpretiamo correttamente il campo con la data di uscita considerandolo come una data R.
+
+```{r}
+# trasformo le date da testo a data 
+games.data <- games.data %>% mutate(release_date = as.Date(release_date) )
+```
+
+Per concludere separiamo il campo owners nel suo lower e upper bound, in modo da poterli usare per operazioni di filtering basate su numeri.
+ 
+```{r}
+# divido le info sul numero di giocatori in lower and upper bounds 
+games.data <- games.data %>% separate(owners, into=c("owners_lwb","owners_upb"), sep="-") %>%
+    mutate(owners_lwb = as.integer(owners_lwb)) %>%
+    mutate(owners_upb = as.integer(owners_upb))
+    
+games.data  
+```
+
+### Separazione delle informazioni su gioco e acquisto
+
+Consideriamo ora il dataset dei giocatori, per renderelo tidy lo suddividiamo in due dataset separati, uno per le operazioni di acquisto dei giochi e uno per le
+attività di gioco:
+
+```{r}
+players.play <- players.data %>% filter(activity == "play") %>% select(-activity)
+players.buy  <- players.data %>% filter(activity == "purchase") %>% select(-activity, -time) 
+players.play  
+players.buy  
+```
+
+# Analisi esplorativa
+
+In questa sezione risponderemo ad alcune semplici domande che possiamo possiamo porci sui dataset considerati, in modo di poterli comprendere meglio per le analisi successive.
+
+## Considerazioni sul tempo di gioco 
+
+In questa sottosezione consideriamo il dataset sulle attività di gioco dei giocatori, in particolare ci chiediamo quali siano i giochi più giocati nel campione analizzato e
+come questi siano distribuiti:
+
+Per prima cosa quindi ordiniamo i giochi per tempo assoluto e cumulativo di gioco: 
+
+```{r}
+games.mostplayed <- players.play %>%
+    group_by(name) %>%
+    summarise(totalTime = sum(time)) %>%
+    arrange(desc(totalTime))
+games.mostplayed  
+```
+
+> Si noti che i primi quattro prodotti più giocati sono realizzati da Valve, la compagnia responsabile della piattaforma Steam. Questo è piuttosto significativo e mostra come una
+piattaforma proprietaria consenta poi di incrementare l'utilizzo dei propri giochi nonostante questi non siano gli unici offerti. E'da considerare inoltre che nel 2018 Steam era 
+largamente la più grande piattaforma del mercato PC dei videogiochi, in grado di coinvolgere gran parte dell'utenza e degli sviluppatori. 
+Solo verso la fine dell'anno, con l'apertura di un primo store generalista veramente concorrente, l'Epic Games Store, si è venuta a creare della concorrenza nel 
+campo del publishing dei giochi PC, prima sostanzialmente monopolizzato da Valve in particolare per la sfera degli sviluppatori indipendenti. 
+Se da un lato la disponibilità di diverse piattaforme sia un vantaggio per il consumatore e gli sviluppatori dal punto di vista economico, questo crea delle 
+problematiche non indifferenti nella gestione degli, ormai estremamente diffusi, giochi multi-giocatore, nei quali possono crearsi situazioni di incompatibilità 
+tra versioni offerte da piattaforme differenti dello stesso gioco, suddividendo così la "userbase" (ossia i giocatori) in insiemi separati e più piccoli.
+Questo fenomeno era classicamente invece limitato al mondo dei giochi su console proprio per la loro natura "chiusa", ossia completamente dettata dalla 
+casa produttrice. In ogni caso gli sviluppatori stanno agendo da diversi anni per mitigare il problema e sono sempre di più i giochi che supportano il 
+"cross-play" ossia la possibilità, per giocatori di piattaforme diverse, di giocare allo stesso gioco.
+
+Osserviamo subito che molti giochi risultano quindi acquistati e non giocati:
+
+```{r}
+# giochi totali
+number.of.classes(players.data, name)
+# giochi acquistati
+number.of.classes(players.buy, name)
+# giochi giocati
+number.of.classes(players.play, name) 
+# differenza
+number.of.classes(players.buy, name) - number.of.classes(players.play, name) 
+```
+
+Questo ci permette di verificare che effettivamente il dataset è consistente per la regola "giocato $\rightarrow$ acquistato", come sarebbe atteso.  
+
+Consideriamo quindi la distribuzione dei tempi di gioco:
+
+```{r}
+# distribuzione del tempo di gioco
+temp <- games.mostplayed %>% factorise(totalTime, c(0,100,500,1000,2000,4000,16000,30000,Inf))
+levels(temp$totalTime) = paste(c(0,100,500,1000,2000,4000,16000,30000), " a\n", c(100,500,1000,2000,4000,16000,30000,Inf) )
+ggplot(temp, legend=FALSE) +
+  labs(title = "Conteggio dei giochi per tempo giocato") +
+  ylab("Conteggio") + 
+  xlab("Tempo di gioco in ore") + 
+  geom_bar(aes(x=totalTime, fill=totalTime)) + 
+  theme(legend.position = "none")
+
+# con scala logaritmica
+ggplot(temp, legend=FALSE) +
+  labs(title = "Conteggio dei giochi per tempo giocato (log scale)") +
+  ylab("Conteggio") + 
+  xlab("Tempo di gioco in ore") + 
+  geom_bar(aes(x=totalTime, fill=totalTime)) + 
+  theme(legend.position = "none") +
+  scale_y_log10()
+
+# concentransosi sull'intervallo 0-100
+temp <- games.mostplayed %>% filter(totalTime<100) %>% factorise(totalTime, c(0,10,20,40,60,80,100))
+levels(temp$totalTime) = paste(c(0,10,20,40,60,80), " a\n", c(10,20,40,60,80,100) )
+ggplot(temp, legend=FALSE) +
+  labs(title = "Conteggio dei giochi per tempo giocato (intervallo 0-100)") +
+  ylab("Conteggio") + 
+  xlab("Tempo di gioco in ore") + 
+  geom_bar(aes(x=totalTime, fill=totalTime)) + 
+  theme(legend.position = "none")
+
+```
+
+Viene naturale ora chiedersi se queste distribuzioni assolute si rispecchiano passando al tempo medio di gioco.
+
+### Numero di Giocatori
+
+Calcoliamo quindi per prima cosa il numero di giocatori per ogni gioco e ne visualizziamo la distribuzione in modo similare al caso precedente:
+
+```{r}
+games.nplayers <- players.play %>%
+    group_by(name) %>% 
+    summarise(totalPlayers = n()) %>%
+    arrange(desc(totalPlayers))
+games.nplayers  
+```
+
+Visualizziamo quindi i risultati:
+
+```{r}
+# distribuzione del numero di giocatori
+temp <- games.nplayers %>% factorise(totalPlayers, c(0,5,10,20,50,100,200,500,1000,Inf))
+levels(temp$totalPlayers) = paste(c(0,5,10,20,50,100,200,500,1000), " a\n", c(5,10,20,50,100,200,500,1000,Inf) )
+ggplot(temp, legend=FALSE) +
+  labs(title = "Conteggio dei giochi per numero di giocatori") +
+  ylab("Conteggio") + 
+  xlab("Numero di giocatori") + 
+  geom_bar(aes(x=totalPlayers, fill=totalPlayers)) + 
+  theme(legend.position = "none")
+
+```
+
+Anche qui si nota la tendenza ad affermarsi di soli pochi giochi. Possiamo ora valutare il tempo medio di gioco.
+
+## Tempo medio di gioco
+
+```{r}
+games.avgplaytime <- players.play %>%
+    group_by(name) %>% 
+    summarise(avgPlayTime = mean(time), players = n() ) %>%
+    arrange(desc(avgPlayTime))
+games.avgplaytime  
+```
+
+Si può notare da questa lista che molti dei giochi con tempo medio più elevato sono giocati da pochi giocatori che si appassionano particolarmente a un gioco specifico. Per evitare di prendere in considerazione casi limite eccezionali (come "Eastside Hockey Manager"), filtriamo i risultati per accettare esclusivamente i giochi con almeno 5 giocatori.
+
+```{r}
+# con più di cento giocatori
+temp <- games.avgplaytime %>% filter(players >= 5) %>% 
+  factorise(avgPlayTime, c(0,5,10,20,40,60,100,200,300,Inf))
+levels(temp$avgPlayTime) = paste(c(0,5,10,20,40,60,100,200,300), " a\n", c(5,10,20,40,60,100,200,300,Inf) )
+ggplot(temp, legend=FALSE) +
+  labs(title = "Conteggio dei giochi per tempo medio di gioco") +
+  ylab("Conteggio") + 
+  xlab("Tempo medio di gioco in ore") + 
+  geom_bar(aes(x=avgPlayTime, fill=avgPlayTime)) + 
+  theme(legend.position = "none")
+```
+
+E'abbastanza probabile, anche se non certo, che i giochi nel range di ore da 0 a 5 siano stati in media provati e poi abbandonati dai giocatori. 
+Il calo drastico dopo le 40 ore probabilmente è dovuto al fatto che molti giochi a giocatore singolo terminano in meno tempo. 
+
+Concludiamo questa sezione valutando quanta correlazione ci sia tra i tempi medi di gioco e il numero di giocatori, per verificare se la selezione effettuata
+sul dataset sia o meno risultata sensata.
+
+```{r}
+ggplot(games.avgplaytime, legend=FALSE) +
+  labs(title = "Giocatori vs Tempo Medio") +
+  ylab("Tempo medio di gioco") + 
+  xlab("Numero di giocatori") + 
+  geom_point(aes(y=avgPlayTime, x=players)) + 
+  theme(legend.position = "none") +
+  scale_x_log10()+
+  scale_y_log10()
+
+ggplot(games.avgplaytime, legend=FALSE) +
+  labs(title = "Giocatori vs Tempo Medio") +
+  ylab("Tempo medio di gioco") + 
+  xlab("Numero di giocatori") + 
+  geom_point(aes(y=avgPlayTime, x=players)) + 
+  theme(legend.position = "none") +
+  scale_y_log10()
+```
+
+I grafici mostrano chiaramente come con l'aumento del numero di giocatori la variabilità rispetto al tempo medio di gioco risulti diminuita:
+
+```{r}
+# completo
+var(games.avgplaytime$avgPlayTime)
+mean(games.avgplaytime$avgPlayTime)
+# >= 5
+var((games.avgplaytime %>% filter(players >= 5))$avgPlayTime)
+mean((games.avgplaytime %>% filter(players >= 5))$avgPlayTime)
+# <= 5
+var((games.avgplaytime %>% filter(players < 5))$avgPlayTime)
+mean((games.avgplaytime %>% filter(players < 5))$avgPlayTime)
+```
+
+Questo conferma l'ipotesi precedente, concentrandosi sui giochi con più di dieci giocatori il trend risulta più chiaro.
+
+```{r}
+ggplot(games.avgplaytime %>% filter(players >= 10), legend=FALSE) +
+  labs(title = "Giocatori vs Tempo Medio") +
+  ylab("Tempo medio di gioco") + 
+  xlab("Numero di giocatori") + 
+  geom_point(aes(y=avgPlayTime, x=players)) + 
+  theme(legend.position = "none") +
+  geom_smooth(aes(y=avgPlayTime, x=players),method = "lm", formula=y~x) +
+  scale_x_log10()+
+  scale_y_log10()
+
+ggplot(games.avgplaytime %>% filter(players >= 10), legend=FALSE) +
+  labs(title = "Giocatori vs Tempo Medio") +
+  ylab("Tempo medio di gioco") + 
+  xlab("Numero di giocatori") + 
+  geom_point(aes(y=avgPlayTime, x=players)) + 
+  theme(legend.position = "none") +
+  geom_smooth(aes(y=avgPlayTime, x=players)) 
+```
+
+mostrando quindi una tendenza all'aumento del tempo medio di gioco a seconda del numero di giocatori. Ritengo questo risultato particolarmente interessante, in quanto
+si potrebbe effettivamente pensare che i giochi con più giocatori tendano ad attirare anche molte persone con scarso interesse che successivamente andrebbero ad 
+abbandonare il gioco, facendo diminuire così notevolmente la media. Potrebbe essere di interesse valutare se questo sia il trend anche nei giochi per dispsitivi 
+mobili (android/iOS) dove il mercato e gli utenti sono solitamente molto diversi.
+
+
+## Dati congiunti
+
+Dopo questa prima fase di analisi esplorativa, possiamo arricchire le informazioni sui giochi aquistati e giocati con quelle delle caratteristiche dei singoli giochi.
+Questo è possibile unendo le due tabelle per nome.
+
+
+```{r}
+# Giochi e tempo di gioco (se disponibile)
+play.data <- na.omit(full_join(by=c("name"), players.play, games.data))
+number.of.classes(players.play, name)
+number.of.classes(play.data, name)
+```
+
+Questi numeri ci indicano che non stiamo considerando più di mille giochi che erano stati giocati dai giocatori presenti nel dataset 200k. Questa perdita di informazioni è dovuta in primo luogo al fatto che stiamo cercando innanzitutto di unire due tabelle su un campo "nome" testuale, cosa inevitabile dato che nel dataset 200k non viene riportato l'appid associato ai giochi (un identificativo unico rilasciato da Steam per ogni gioco pubblicato). Certi casi invece riguardano il ritiro di vecchie versioni dei giochi dal
+commercio per far spazio a versioni rivisitate o migliorate (spesso chiamate remastered). Consideriamo due casi nello specifico, le due serie "Civilization" e "BioShock" per avere un'idea migliore della problematica:
+
+```{r}
+q <- "civilization"
+# dataset dei giochi
+string.query(games.data, name, q) %>% get.unique(name) %>% arrange(desc(name))  
+# dataset dei giocatori
+string.query(players.play, name, q) %>% get.unique(name) %>% arrange(desc(name))  
+# dataset uniti
+string.query(play.data, name, q) %>% get.unique(name) %>% arrange(desc(name))  
+
+q <- "bioshock"
+# dataset dei giochi
+string.query(games.data, name, q) %>% get.unique(name) %>% arrange(desc(name))  
+# dataset dei giocatori
+string.query(players.play, name, q) %>% get.unique(name) %>% arrange(desc(name))  
+# dataset uniti
+string.query(play.data, name, q) %>% get.unique(name) %>% arrange(desc(name))  
+```
+
+Nel caso di "Civilization" osserviamo che "sid meier's civilization iv warlords" e "sid meier's civilization iv beyond the sword" erano presenti tra i giochi giocati ma non tra i giochi di Steam noti, questo probabilmente è dato dal fatto che queste due sono espansioni di "civilization iv" e dunque ora non sono più considerate un gioco separato; ovviamente è anche possibile che il dataset con i giochi di Steam del 2019 sia incompleto. "lost" e "idle civilization" sono giochi meno noti, e non sono stati giocati da nessuno dei 
+giocatori campionati. "Precivilization marble age" è presente solo come gioco giocato, a quanto sembra il suo nome è stato cambiato in solo "Marble age". In totale quindi non
+è stato possibile aggiungere le ulteriori informazioni a tre diversi giochi. Il caso della serie "BioShock" è invece emblematico per la seconda problematica citata in precedenza: in questo caso si è passati da versioni "base" a versioni "remastered" dello stesso gioco, con conseguente cambio del nome. 
+
+Continueremo le analisi con questo dataset ridotto ma informativo, quantifihiamo ora la perdita di giochi e giocatori rispetto al dataset originale:
+
+```{r}
+# giocatori persi
+number.of.classes(players.play, player) - number.of.classes(play.data, player)
+# giochi persi
+number.of.classes(players.play, name) - number.of.classes(play.data, name)
+```
+
+Il dataset rimane comunque abbastanza ricco per le successive analisi:
+
+```{r}
+# giocatori finali
+number.of.classes(play.data, player)
+# giochi finali
+number.of.classes(play.data, name)
+```
+
+
+#### Datazione del dataset:
+
+Individuare la problematica che riguarda i giochi "BioShock" ci permette di determinare un intervallo all'interno del quale i dati sono stati acquisiti, in quanto i
+giochi originali sono stati completamente eliminati da Steam e sostituiti per tutti gli utenti dalle nuove versioni nel Settembre 2016.
+
+```{r}
+play.data %>% select(name, release_date) %>% unique() %>% arrange(desc(release_date))  
+```
+
+come si può vedere, l'analisi sembra mostrarci diversi giochi che effettivamente risultano essere successivi al 2016, questa situazione è dovuta al fatto che molti giochi 
+approdano su Steam in "Early Access" ossia come giochi incompleti ma già acquistabili e giocabili, che successivamente verranno definitivamente pubblicati quando pronti.
+Questo significa che spesso i giocatori giochino ad alcuni giochi prima della loro vera e propria uscita e, quando gli sviluppatori prendono alla lettera il concetto di *beta perpetua*, anche diversi anni prima. Si consideri il caso di "space engineers", è entrato in "Early Access" nel 2013 ma pubblicato solamente all'inizio del 2019.
+Quindi è necessario cercare un videogioco che non abbia avuto questa fase di pre-lancio o che l'abbia avuta poco prima del settembre 2016. Scegliamo quindi il gioco
+"out there somewhere" pubblicato su Steam nel 2016-03-14 e che non ha avuto una fase ad accesso anticipato in quanto porting per la piattaforma Steam di un 
+gioco realizzato nel 2012.
+
+> Un porting per un gioco è semplicemente la sua riedizione su un'altra piattaforma.
+
+Se non si è convinti che le considerazioni riguardanti la remasterizzazione di "BioShock" siano attendibili, si consideri che il gioco "Civilization VI" è uscito 
+nell'ottobre del 2016 e che non è stato individuato nessun giocatore nel campione analizzato che lo abbia giocato. Possiamo calcolare (una sottostima) di quale sia la
+probabilità di un tale evento nel caso in cui il campionamento sia stato effettuato dopo l'uscita di questo gioco. Per farlo usiamo due dati non disponibili direttamente
+sul dataset: 
+
+* Il massimo numero di utenti contemporaneamente giocanti a Civilization VI nel solo mese di Ottobre 2016 è stato di
+  [162.310](https://www.statista.com/statistics/980486/civilization-vi-number-players-steam/) utenti 
+  (una sottostima degli utenti totali, considerando che in sole due settimane aveva superato il milione di copie vendute)
+* Nel 2018 si sono registrati circa [90 Milioni](https://www.statista.com/statistics/733277/number-stream-dau-mau/) di giocatori attivi mensilmente, assumeremo che
+  i dati siano stati ottenuti da utenti attivi. Se così non fosse si stima che gli utenti Steam complessivi possano aver raggiunto il miliardo nel 2019, ma questo numero
+  è molto difficile da provare e racchiude certamente molti utenti "inesistenti".
+  
+```{r}
+# numero di campioni 
+number.of.classes(players.play, player)
+# probabilità di non estrazione (caso realistico)
+(1-(162310/90000000))**number.of.classes(players.play, player)
+# probabilità di non estrazione (caso estremo)
+(1-(162310/1000000000))**number.of.classes(players.play, player)
+# probabilità di non estrazione (caso estremo, con milione di copie vendute)
+(1-(1000000/1000000000))**number.of.classes(players.play, player)
+```
+
+Il che conferma come sia molto difficile pensare che non aver individuato giocatori di "Civilization VI" possa essere dovuto al caso.
+Possiamo concludere con una certa convinzione quindi che il dataset 200k risalga a più o meno la metà del 2016.
+
+## Valutazione dei punteggi degli utenti
+
+Per mostrare le possibilità del nuovo dataset creato, consideriamo ora la seguente query che ci mostra la frequenza dei voti positivi per
+ogni gioco della serie "Sid Meier's Civilization" giocato nel dataset 200k:
+
+```{r}
+string.query(games.data, name, "sid meiers civilization") %>%
+  filter.by.tag.or(steamspy_tags, c("Strategy")) %>%
+  mutate(score = ifelse( positive_ratings > 100, (positive_ratings)/(positive_ratings+negative_ratings), 0)) %>%
+  select(name,score) %>%
+  arrange(desc(score))  
+```
+
+E' interessante notare come, dopo "Civilization V", i due seguiti "beyond earth" e "VI" risultino avere un punteggio decisamente più basso. Possiamo chiederci se 
+questi siano casi del cosiddetto fenomeno del "Review Bombing", per il quale un gioco viene bersagliato in modo sistematico da valutazioni negative da parte degli utenti.
+Questo può accadere per molti motivi diversi: non raggiungimento delle aspettative, politiche aziendali non accettate dai fan, problemi dal punto di vista dell'implementazione
+del gioco (per bug o ottimizzazione), eccetera ... . Per quanto questa pratica possa sembrare scorretta in quanto valuta il gioco in un determinato contesto e momento del suo
+ciclo di vita, è in realtà l'unica mossa da parte degli appassionati per poter far effettivamente sentire la loro opinione. La stampa specializzata che si occupa invece
+della recensione sistematica dei giochi in uscita normalmente non è affetta da queste situazioni e valuta i diversi giochi con il proprio metro di giudizio normale.
+Ovviamente, anche fra la stampa specializzata, possono esserci opinioni diverse nella valutazione dei giochi in quanto questi sono prodotti con una componente 
+artistica e dunque prettamente soggettiva, similmente a quanto accade normalmente ad esempio in ambito cinematografico. 
+Per questo motivo, per poter avere una valutazione più oggettiva dei prodotti che risenta in minor modo delle opinioni personali dei vari recensori 
+si è sviluppato il sito [*metacritic*](https://www.metacritic.com/), che ha lo scopo di raccogliere le recensioni ufficiali di diversi media,
+tra i quali anche i videogiochi, e di compararle e mediarle. Il sito fornisce infine un numero per ogni prodotto, detto *metascore*, che 
+rappresenta la media delle valutazioni che ha ricevuto. Questa media viene pesata anche secondo l'autorità del recensore, associata principalmente
+al numero di recensioni redatte. Si noti che il *metascore* non include alcuna valutazione da parte degli utenti, che invece sono trattate in 
+modo separato nel sito. (per altre informazioni, si consulti [questo link](https://www.metacritic.com/about-metascores)).
+
+Per accedere a questi dati, consideriamo un altro dataset da Kaggle, [Metacritic all time games stats](https://www.kaggle.com/skateddu/metacritic-all-time-games-stats).
+Si noti che solamente i giochi con un po'di rilievo riescono ad essere considerati dai recensori e così ad ottenere un *metascore*, quindi ci attendiamo l'assenza di questa 
+informazione per alcuni dei giochi considerati, in quel caso sarà necessario affidarsi solamente agli utenti.
+
+```{r}
+metacritic.data <- read.csv(
+    "./data/metacritic_games.csv")
+metacritic.data  
+# la colonna user_score deve essere numerica
+metacritic.data <- mutate(metacritic.data, user_score = as.numeric(gsub("\\.", "",user_score)))
+# semplifico i nomi per poter effettuare il join con l'altro dataset 
+metacritic.data <- clean.text(metacritic.data, name, "[-.:™®'’]")
+# considero solo la piattaforma PC e filtro alcune colonne non necessarie
+metacritic.data <- metacritic.data %>% filter(platform == "PC") %>% 
+  select(name, genre.s., players, rating, metascore, user_score, release_date, 
+         critic_positive, critic_neutral, critic_negative, user_positive, user_neutral, user_negative) %>%
+  mutate(critic_total = critic_positive + critic_neutral + critic_negative, user_total = user_positive + user_neutral + user_negative) %>%
+  mutate(rating_metacritic = rating) %>% select(-rating) 
+# gestisco le date
+Sys.setlocale("LC_TIME", "C")
+metacritic.data <- metacritic.data %>% mutate(release_date = tolower(gsub(",", " ",release_date))) %>%
+  mutate(release_date = format(as.Date(strptime( release_date, "%b %d %Y")), "%d-%m-%y"))
+metacritic.data  
+```
+
+Soffermiamoci ad analizzare questo dataset prima di continuare rispondendo alla domanda che ci siamo posti. 
+
+Il numero di giochi recensiti è:
+
+```{r}
+number.of.classes(metacritic.data, name)
+```
+
+Il che ci indica come esistano giochi con lo stesso nome, di questi selezioniamo solo il più recente:
+
+```{r}
+metacritic.data <- metacritic.data %>% group_by(name, release_date) %>% arrange(name, release_date) %>% group_by(name) %>% slice(1) 
+```
+
+Per prima cosa proviamo a vedere internamente al sito metacritic la correlazione tra voto degli utenti e dei recensori:
+
+```{r, message=FALSE}
+ggplot(na.omit(metacritic.data)) +
+  geom_point(aes(x=user_score, y=metascore, col=log(user_total), size=critic_total)) +
+  geom_smooth(aes(x=user_score, y=metascore), method = "lm", color = "green") +
+  geom_line(data = data.frame(x = seq(0,100), y = seq(0,100)), aes(x=x,y=y), color = "red")+
+  labs(title = "Userscore vs Metascore") +
+  ylab("Metascore") + 
+  xlab("Userscore")
+# mostrare i nomi degli outliers
+```
+
+Si noti che i punti al di sopra della retta rossa sono stati valutati meglio dalla critica che dagli utenti, viceversa per i punti al di sotto.
+
+Visiualizziamo ora la distribuzione della differenza fra punteggi della critica e degli utenti:
+
+```{r}
+md.no.NA <- na.omit(metacritic.data)
+md.no.NA.filtered.hi <- filter(md.no.NA, metascore >= 80)
+md.no.NA.filtered.lo <- filter(md.no.NA, metascore <= 50)
+
+ggplot(md.no.NA) +
+  geom_density(aes(x=user_score-metascore), col="red", linetype = "dashed") +
+  geom_area( data = data.frame(x=seq(-100,100,0.1), y=dnorm(seq(-100,100,0.1), 
+                mean=mean(md.no.NA$user_score-md.no.NA$metascore),
+                sd=sd(md.no.NA$user_score-md.no.NA$metascore))), 
+             aes(x=x,y=y), col="red", fill="red", alpha = 0.1) +
+  geom_density(data = md.no.NA.filtered.hi, aes(x=user_score-metascore), col="darkgreen", linetype = "dashed") +
+  geom_area( data = data.frame(x=seq(-100,100,0.1), y=dnorm(seq(-100,100,0.1), 
+                mean=mean(md.no.NA.filtered.hi$user_score-md.no.NA.filtered.hi$metascore),
+                sd=sd(md.no.NA.filtered.hi$user_score-md.no.NA.filtered.hi$metascore))), 
+             aes(x=x,y=y), col="darkgreen", fill="green", alpha = 0.1) +
+  geom_density(data = md.no.NA.filtered.lo, aes(x=user_score-metascore), col="blue", linetype = "dashed") +
+  geom_area(data = data.frame(x=seq(-100,100,0.1), y=dnorm(seq(-100,100,0.1), 
+                mean=mean(md.no.NA.filtered.lo$user_score-md.no.NA.filtered.lo$metascore),
+                sd=sd(md.no.NA.filtered.lo$user_score-md.no.NA.filtered.lo$metascore))), 
+             aes(x=x,y=y), col="blue", fill="blue", alpha = 0.1) +
+  labs(title = "Delta Userscore-Metascore") +
+  ylab("frequenze") + 
+  xlab("delta")  
+```
+
+Ove verde indica i giochi di maggior successo (metascore >= 80), Blu di minor successo (metascore <= 50), mentre le curve rosse sono associate all'intero dataset. 
+Per ogni selezione sono state mostrate distribuzione empirica e approssimata a gaussiana.
+
+si osserva una certa tendenza per gli utenti a proporre voti lievemente più negativi rispetto alla critica, le situazioni si estremizzano 
+nel caso dei giochi con alto punteggio e si invertono con quelli con basso punteggio:
+
+```{r}
+# discrepanza media (tutto il dataset)
+mean(md.no.NA$user_score-md.no.NA$metascore)
+# discrepanza media (metascore >= 80)
+mean(md.no.NA.filtered.hi$user_score-md.no.NA.filtered.hi$metascore)
+# discrepanza media (metascore <= 50)
+mean(md.no.NA.filtered.lo$user_score-md.no.NA.filtered.lo$metascore)
+```
+
+Si notano inoltre delle "gobbe" evidenti sulla coda sinistra della distribuzione empirica associata ai giochi con metascore molto positivo, probabilmente possono essere proprio
+effetti legati al "Review bombing".
+
+Questo ci mostra come i giochi con uno score basso siano valutati più positivamente dai critici che dagli utenti e vice-versa per i punteggi più alti, questo probabilmente
+potrebbe essere dovuto al fatto che il voto degli utenti è meno ragionato (in media) e più basato sulle sensazioni dirette, quindi semplicemente se un gioco è piaciuto 
+avrà una valutazione alta, altrimenti una bassa.
+
+Concentriamoci sui giochi della serie "Civilization":
+
+```{r}
+ggplot(na.omit(metacritic.data %>% string.query(name, "sid meiers civilization"))) +
+  geom_point(aes(x=user_score, y=metascore, col=log(user_total), size=critic_total)) +
+  geom_node_text( aes(x=user_score, y=metascore, label = gsub("sid meiers civilization","",name)), color = "black", size = 3, repel=TRUE ) +
+  geom_line(data = data.frame(x = seq(0,100), y = seq(0,100)), aes(x=x,y=y), color = "red")+
+  labs(title = "Userscore vs Metascore per la serie Civilization") +
+  ylab("Metascore") + 
+  xlab("Userscore") +
+  coord_cartesian(xlim=c(50,100),ylim=c(50,100)) 
+```
+
+Come si può notare, il metascore della serie "Civilization" si attesta a vaolri pittosto alti e consistenti, lo userscore invece spazia dall'insufficiente al molto buono.
+
+Uniamo queste informazioni ai dati di gioco:
+
+```{r}
+played.civs <- md.no.NA %>% full_join(games.data %>% mutate(
+    name = unlist(map(name, ~ gsub("sid meiers civilization iii complete","sid meiers civilization iii",.)))),
+    by=c("name")) %>% 
+  string.query(name, "sid meiers civilization") %>% na.omit()
+played.civs
+```
+
+Confrontiamo ora le valutazioni degli utenti di Metacritic e Steam:
+
+```{r}
+ggplot(played.civs %>% mutate(steam_user_score = 100*(positive_ratings)/(positive_ratings+negative_ratings)) ) +
+  geom_point(aes(x=steam_user_score, y=user_score)) +
+  geom_line(data = data.frame(x = seq(0,100), y = seq(0,100)), aes(x=x,y=y), color = "red") +
+  geom_node_text( aes(x=steam_user_score, y=user_score, 
+                      label = gsub("sid meiers civilization","",name)), color = "black", size = 3, repel=TRUE ) +
+  labs(title = "Steam Userscore vs Metacritic Userscore per la serie Civilization") +
+  ylab("Voto medio degli utenti su Metacritic") + 
+  xlab("% valutazioni positive su Steam") +
+  coord_cartesian(xlim=c(50,100),ylim=c(50,100)) 
+```
+
+Come si può vedere, su "Civilization VI" sembra esserci un discreto consenso. Ci si può chiedere come si comparino le distribuzioni dei punteggi basati su
+Metascore, utenti Metacritic e utenti Steam.
+
+```{r}
+ggplot(md.no.NA %>% full_join(games.data,by=c("name")) %>% na.omit() %>%
+         mutate(steam_user_score = 100*(positive_ratings)/(positive_ratings+negative_ratings)) ) +
+  geom_density(aes(x=user_score), col="red", fill="red", linetype = "dashed", alpha=0.1) +
+  geom_density(aes(x=steam_user_score), col="blue", fill="blue", linetype = "dashed", alpha=0.1) +
+  geom_density(aes(x=metascore), col="darkgreen", fill="green", linetype = "dashed", alpha=0.1) +
+  labs(title = "Distribuzioni punteggi utenti Metacritic (rosso) Steam (blu) e Metascore (verde)") +
+  ylab("frequenze") + 
+  xlab("voto/valutazione")  
+```
+
+Si osserva come la percentuale di valutazioni di apprezzamento degli utenti di steam non abbia una distribuzione simile a quella dei voti. Costruiamo un modello di regressione lineare generalizzato per per cercare di rendere voti e valutazioni direttamente comparabili. 
+
+```{r}
+df <- md.no.NA %>% full_join(games.data,by=c("name")) %>% na.omit() %>%
+         mutate(steam_user_score = 100*(positive_ratings)/(positive_ratings+negative_ratings)) %>% select(name, user_score, steam_user_score) 
+
+ggplot( df ) +
+  geom_point(aes(x=steam_user_score, y=user_score)) +
+  geom_smooth(aes(y=user_score, x=steam_user_score), color="orange", method = "glm", formula = y~x) +
+  geom_smooth(aes(y=user_score, x=steam_user_score), color="black", method = "glm", formula = y~x+I(x^2)) +
+  geom_smooth(aes(y=user_score, x=steam_user_score), color="magenta", method = "glm", formula = y~x+I(x^2)+I(x^3)) 
+
+l1 <- lm(user_score~steam_user_score , data = df)
+l2 <- lm(user_score~steam_user_score + I(steam_user_score^2) , data = df)
+l3 <- lm(user_score~steam_user_score + I(steam_user_score^2) + I(steam_user_score^3) , data = df)
+
+AIC(l1,l2,l3)  
+BIC(l1,l2,l3)  
+
+summary(l1)
+summary(l2)
+summary(l3)
+
+f1 <- function(x) l1$coefficients[1] + l1$coefficients[2]*x
+f2 <- function(x) l2$coefficients[1] + l2$coefficients[2]*x + l2$coefficients[3]*(x**2)
+f3 <- function(x) l3$coefficients[1] + l3$coefficients[2]*x + l3$coefficients[3]*(x**2) + l3$coefficients[4]*(x**3)
+
+```
+
+Il secondo modello (nero) risulta essere quello migliore secondo BIC, AIC, e significatività dei parametri. Il grafico seguente illustra le nuove distribuzioni ottenute adattando quella delle valutazioni prese da Steam.
+
+```{r}
+# funzione scelta sulla base dei risultati precedenti
+positive.ratio.to.mark <- f2
+
+ggplot( df ) +
+  geom_density(aes(x=steam_user_score), col="blue", fill="blue", linetype = "dashed", alpha=0.1) +
+  geom_density(aes(x=user_score), col="red", fill="red", linetype = "dashed", alpha=0.1) +
+  geom_density(aes(x=map_dbl(steam_user_score, f1)), col="orange", alpha=0.1) +
+  geom_density(aes(x=map_dbl(steam_user_score, f2)), col="black", alpha=0.1) +
+  geom_density(aes(x=map_dbl(steam_user_score, f3)), col="magenta", alpha=0.1) +
+  labs(title = "Adattamento valutazioni e voti") +
+  ylab("frequenze") + 
+  xlab("voto/valutazione")  
+```
+
+Queste nuove distribuzioni saranno utili successivamente per valutare in modo attendibile i giochi che non dispongono di un voto direttamente presente sul portale di Metacritic.
+
+Osservare che le distribuzioni delle valutazioni degli utenti Metacritic e quelle del metascore siano molto simili è molto interessante. 
+Calcolare un punteggio a partire dal solo rapporto apprezzamenti/valutazioni sembra invece sovrastimare abbondantemente la valutazione.
+Procediamo quindi infine a vedere dove si posizionano i giochi della serie "Civilization" rispetto alle distribuzioni empiriche calcolate
+per i delta di valutazione. Includiamo in questa fase anche un caso noto e decisamente marcato di "review bombing", quello 
+del gioco "Star Wars Battlefront II":
+
+```{r}
+
+md.no.NA %>% string.query(name,"battlefront ii")
+
+ggplot(md.no.NA) +
+  geom_density(aes(x=user_score-metascore), col="darkgreen", linetype = "dashed") +
+  geom_area( data = data.frame(x=seq(-100,100,0.1), y=dnorm(seq(-100,100,0.1), 
+                mean=mean(md.no.NA$user_score-md.no.NA$metascore),
+                sd=sd(md.no.NA$user_score-md.no.NA$metascore))), 
+             aes(x=x,y=y), col="darkgreen", fill="green", alpha = 0.1) +
+  geom_point(data = played.civs, aes(x=user_score-metascore, 
+               y=dnorm(user_score-metascore, 
+                  mean=mean(md.no.NA$user_score-md.no.NA$metascore),
+                  sd=sd(md.no.NA$user_score-md.no.NA$metascore)))) +
+  geom_node_text(data = played.civs, aes(x=user_score-metascore, 
+      y=dnorm(user_score-metascore, 
+        mean=mean(md.no.NA$user_score-md.no.NA$metascore),
+        sd=sd(md.no.NA$user_score-md.no.NA$metascore)), 
+      label = toupper(gsub("sid meiers civilization","",name))), color = "black", size = 3, repel=TRUE ) +
+  geom_point(data = md.no.NA %>% string.query(name,"battlefront ii"), aes(x=user_score-metascore, 
+               y=dnorm(user_score-metascore, 
+                  mean=mean(md.no.NA$user_score-md.no.NA$metascore),
+                  sd=sd(md.no.NA$user_score-md.no.NA$metascore))), col="red") +
+  geom_node_text(data = md.no.NA %>% string.query(name,"battlefront ii"), aes(x=user_score-metascore, 
+      y=dnorm(user_score-metascore, 
+        mean=mean(md.no.NA$user_score-md.no.NA$metascore),
+        sd=sd(md.no.NA$user_score-md.no.NA$metascore)), 
+      label = toupper(gsub("sid meiers civilization","",name))), color = "red", size = 3, repel=TRUE ) +
+  labs(title = "Delta Userscore vs Metascore per la serie Civilization") +
+  ylab("frequenze") + 
+  xlab("delta")
+```
+
+
+Da questo grafico possiamo concludere che effettivamente "Civilization VI" ha ricevuto molte valutazioni negative da parte degli utenti, anche se il gioco della serie
+che effettivamente ha subito il trattamento peggiore risulta essere "beyond earth". Calandoci nel contesto reale questo è effettivamente facilmente comprensibile: 
+"beyond earth" è uno spinoff della serie principale con una visione prettamente fantascientifica, ben diversa da quella degli altri titoli della serie. E' evidente
+che un cambio così marcato non sia quindi stato apprezzato dagli appassionati che hanno valutato negativamente il prodotto. Concludiamo mostrando l'effetto 
+ancora più marcato avuto nel rapporto valutazioni positive/negative su Steam. (Non riportiamo dati su "Star Wars battlefront II" in quanto questo 
+è un gioco EA e non era disponibile su Steam).
+
+
+```{r}
+df <- md.no.NA %>% full_join(games.data,by=c("name")) %>% na.omit() %>%
+      mutate(steam_user_score = 100*(positive_ratings)/(positive_ratings+negative_ratings))
+df.civ <- played.civs %>%
+      mutate(steam_user_score = 100*(positive_ratings)/(positive_ratings+negative_ratings))
+ggplot( df ) +
+  geom_density(aes(x=steam_user_score-metascore), col="darkgreen", fill="green", linetype = "dashed", alpha=0.1) +
+  geom_area( data = data.frame(x=seq(-100,100,0.1), 
+                 y=dnorm(seq(-100,100,0.1), 
+                   mean=mean(df$steam_user_score-df$metascore),
+                   sd=sd(df$steam_user_score-df$metascore))), 
+             aes(x=x,y=y), col="darkgreen", fill="green", alpha = 0.1) +
+  geom_point(data = df.civ, aes(x=steam_user_score-metascore, 
+                 y=dnorm(steam_user_score-metascore, 
+                    mean=mean(df$steam_user_score-df$metascore),
+                    sd=sd(df$steam_user_score-df$metascore)))) +
+  geom_node_text(data = df.civ, aes(x=steam_user_score-metascore, 
+                 y=dnorm(steam_user_score-metascore, 
+                    mean=mean(df$steam_user_score-df$metascore),
+                    sd=sd(df$steam_user_score-df$metascore)), 
+      label = toupper(gsub("sid meiers civilization","",name))), color = "black", size = 3, repel=TRUE ) +
+  labs(title = "Delta % valutazioni positive su Steam vs Metascore per la serie Civilization") +
+  ylab("frequenze") + 
+  xlab("delta")
+```
+
+La distribuzione delle percentuali di valutazioni positive non è normale, qui viene comunque approssimata così per visualizzare più chiaramente la problematica  
+  
+> "Star Wars Battlefront II" è stato ampliamente criticato dagli utenti in quanto il gioco proponeva una enorme quantità di "microtransazioni", in quel periodo
+  infatti EA (non da sola) stava spingendo per introdurre delle metodologie legate ai software come servizio
+  (SaS) all'interno dei propri giochi, in quanto decisamente remunerative. Questo ha creato gradualmente una situazione di malcontento nei giocatori
+  che è letteralmente esplosa al lancio di questo gioco. Questa, per così dire, ribellione ha portato a un ridimensionamento notevole della
+  quantità di microtransazioni nei giochi successivi. Ovviamente la situazione è molto complessa e articolata e necessiterebbe senza dubbio di 
+  una trattazione molto più esaustiva che esula dalle finalità di questa relazione.
+  
+### Nota sull'incompletezza unendo i dati di gioco con quelli di metacritic
+
+Calcoliamo quanto impatta accettare solamente dati che abbiano disponibili tutti i campi offerti da Metacritic:
+  
+```{r}
+# giocatori iniziali
+number.of.classes(play.data, player)
+# giochi iniziali
+number.of.classes(play.data, name)
+# delta giocatori finali
+number.of.classes(play.data, player) - number.of.classes(play.data %>% full_join(md.no.NA,by=c("name")) %>% na.omit(), player)
+# delta giochi finali
+number.of.classes(play.data, name) - number.of.classes(play.data %>% full_join(md.no.NA,by=c("name")) %>% na.omit(), name)
+```
+
+Si può certamente fare di meglio tenendo conto che non tutti i giochi hanno abbastanza recensioni utente o specializzate da ottenere un metascore. Utilizzeremo 
+quindi queste informazioni solo quando sono effettivamente disponibili, nei restanti casi operiamo sui giochi e giocatori già selezionati e stimiamo le valutazioni utilizzando il modello presentato in precedenza.
+
+## Reti delle associazioni gioco-giocatore
+
+In questa sezione prenderemo in considerazione le reti descritte dalle relazioni di gioco e di acquisto,
+che sono direttamente rappresentate dal dataset 200k.  
+ 
+```{r}
+totalTime.game <- play.data %>% 
+    group_by(name) %>%
+    summarise(totalGameTime = sum(time)) %>%
+    select(name, totalGameTime) %>% arrange(desc(totalGameTime))
+
+totalTime.player <- play.data %>%
+    group_by(player) %>%
+    summarise(totalGameTime = sum(time)) %>%
+    select(player, totalGameTime) %>% arrange(desc(totalGameTime))
+
+totalTime.game  
+totalTime.player  
+```
+
+```{r}
+
+games <- play.data %>% select(name) %>% arrange(name) %>% unique() %>% mutate(is_game = TRUE) %>%
+  inner_join(games.data, by=c("name")) %>% inner_join(totalTime.game, by=c("name")) %>%
+  arrange(name, release_date) %>% group_by(name) %>% slice(1) 
+
+players <- play.data %>% select(player) %>% arrange(player) %>% unique() %>% 
+  mutate(is_game = FALSE) %>% mutate(name = player) %>% select(-player) %>% 
+  full_join(totalTime.player %>% mutate(name=player) %>% select(-player), by=c("name")) %>%
+  mutate(name = paste("__",name,"__") )
+
+play.relation <- play.data %>% mutate(player = paste("__",player,"__") ) %>%
+  mutate(from=name, to=player) %>%
+  semi_join(rbind.fill(games,players), by=c("name")) %>% select(from, to, time) 
+
+players.games.graph <- graph_from_data_frame(play.relation, vertices=rbind.fill(games,players), directed=FALSE) %>%
+  as_tbl_graph() %>%
+  mutate(centrality = centrality_authority())
+
+players.games.graph 
+
+# verifico se il grafo è bipartito (come dovrebbe essere)
+as.data.frame(get.edgelist(players.games.graph)) %>% 
+  full_join(games %>% select(name,is_game),by=c("V1" = "name") ) %>% 
+  full_join(players %>% select(name,is_game),by=c("V2" = "name") ) %>% filter(is_game.x == is_game.y)
+# questo dataframe deve essere vuoto
+
+```
+
+
+```{r}
+# considero un grafo più piccolo per la rappresentazione
+players.games.graph.subgraph <- 
+  to_subgraph(players.games.graph, 
+              ifelse(is_game, totalGameTime > 15000, totalGameTime > 3000), 
+              subset_by = "nodes")$subgraph
+
+ggraph(players.games.graph.subgraph, layout = 'kk') +
+  geom_edge_link(aes(alpha=time), color="gray") +
+  geom_node_point(aes(col=is_game, size=centrality, alpha=ifelse(is_game,log(totalGameTime)+0.5,max(log(totalGameTime))) )) +
+  geom_node_text( aes( filter = centrality > 0.15, label = name), color = "black", size = 3, repel=TRUE ) +
+  labs(title = "Rete giochi (>15000 ore di gioco) giocatori (>4000 ore di gioco)",
+       color = "E' un gioco?", alpha="log(time)") +
+  scale_size(guide="none") 
+
+```
+
+dove la dimensione dei nodi è data dalla centralità. Valutiamo quindi alcune delle proprietà di questo grafo. Iniziamo dalla distribuzione dei gradi:
+
+```{r}
+players.games.graph.degrees <- as.data.frame(degree(players.games.graph)) %>% mutate(name = names(degree(players.games.graph))) %>%
+  rename(degree = "degree(players.games.graph)") %>% join(as.data.frame(players.games.graph) %>% select(name,is_game), by=c("name"))
+
+players.games.graph.degrees  
+  
+ggplot(players.games.graph.degrees %>% factorise(degree, c(0,5,10,20,50,100,500,Inf))) +
+  geom_bar(aes(x=degree, fill=is_game), position = "dodge") + 
+  labs(title = "Conteggio dei gradi dei nodi") +
+  ylab("Conteggio") + 
+  xlab("Range del numero di vicini") 
+
+ggplot(players.games.graph.degrees) +
+  geom_histogram(aes(x=degree, fill=is_game), binwidth = 25, alpha=0.3, position="dodge") +
+  geom_density(aes(x=degree, y=..count..), linetype = "dotted") +
+  coord_cartesian(xlim=c(0,100)) +
+  labs(title = "Andamento della distribuzione dei gradi") +
+  ylab("Conteggio") + 
+  xlab("Numero di vicini") 
+ 
+```
+
+Questa distribuzione dei gradi segue quella di una distribuzione a coda lunga, possiamo quindi concludere che questo grafo segue il modello a *collegamento preferenziale* di
+Barabasi-Albert. Questa ipotesi viene confermata anche dall'istogramma delle distanze tra i nodi:
+
+```{r}
+# la computazione è molto pesante
+#df <- as.data.frame(as.table(players.games.graph %>% distances())) %>% filter(Freq != Inf & Freq != 0) %>% select(Freq)
+#ggplot(df %>% factorise(Freq, c(0,1,2,3,4,5,10,Inf))) + 
+#  geom_bar(aes(x=Freq)) + 
+#  labs(title = "Valutazione delle distanze tra i nodi") +
+#  ylab("Conteggio") + 
+#  xlab("Distanza") 
+```
+
+Possiamo facilmente vedere, come intuibile, che i giochi sono più centrali, secondo il criterio di autorità, rispetto ai giocatori:
+
+```{r}
+players.games.graph %>% arrange(desc(centrality)) %>% select(name,centrality,is_game) %>% as.data.frame()  
+players.games.graph %>% filter(is_game == FALSE) %>% arrange(desc(centrality)) %>% select(name,centrality,is_game) %>% as.data.frame()  
+```
+
+Ovviamente questo è dovuto principalmente al fatto che i giocatori sono molti di più dei giochi e che questo è un grafo bipartito, che ammette quindi solo relazioni
+giochi-giocatori. Valutiamo ora la presenza o meno della classica *componente gigante* che viene a formarsi nei grafi non diretti a *collegamento preferenziale* come
+questo:
+
+```{r}
+ncc <- count_components(players.games.graph)
+ncc
+component_distribution(players.games.graph) %>% imap(~ c(.x*ncc,.y) ) %>% keep(~ (.[1] != 0) ) %>% map(~paste("Dimensione:", .[2], "Numero:", .[1]))
+```
+
+La componente gigante quindi è presente e raccoglie pressochè tutti i nodi della rete. 
+
+Possiamo chiederci se i giochi più giocati siano anche quelli più graditi:
+
+```{r, warning=FALSE, message=FALSE}
+
+df <- players.games.graph.degrees %>% inner_join(as.data.frame(players.games.graph)) %>%  
+  mutate(score = 100*(positive_ratings)/(positive_ratings+negative_ratings)) %>% select(degree,name,totalGameTime,score,centrality)
+  
+# i giocatori sono eliminati automaticamente
+ggplot(df) +
+  geom_node_point(aes(x=totalGameTime, y=score)) +
+  scale_x_log10() +
+  labs(title = "Tempo medio di gioco vs Score") +
+  ylab("% valutazioni positive") + 
+  xlab("Tempo medio di gioco") 
+
+ggplot(df) +
+  geom_node_point(aes(x=degree, y=score)) +
+  scale_x_log10() +
+  labs(title = "Numero di giocatori vs Score") +
+  ylab("% valutazioni positive") + 
+  xlab("Numero di giocatori") 
+
+ggplot(df) +
+  geom_node_point(aes(x=centrality, y=score)) +
+  labs(title = "Centralità vs score") +
+  xlab("Centralità") + 
+  ylab("% valutazioni positive") 
+
+```
+
+Si può osservare quindi come, se accade che un gioco si affermi, ossia che abbia un alto tempo di gioco, livello di autorità o numero di giocatori, allora
+difficilmente questo avrà un basso score.
+
+```{r}
+ggplot(df) +
+  geom_node_point(aes(x=degree, y=centrality)) +
+  scale_x_log10() +
+  labs(title = "Numero di giocatori vs centralità") +
+  ylab("centralità") + 
+  xlab("Numero di vicini") 
+```
+
+Ovviamente, data la formula per il calcolo dell'autorità, questa correla fortemente con il numero di nodi adiacenti.
+
+## Grafo della userbase condivisa
+
+Più maneggevole e interessante per il nostro scopo di creare un sistema per consigliare nuovi giochi da giocare è il *grafo della userbase condivisa*, 
+ossia il grafo pesato che mostra per ogni coppia di giochi il numero di giocatori che li giocano entrambi. Questo grafo è particolarmente 
+significativo perchè mette in relazione diretta i giochi senza dover tener più direttamente traccia degli utenti.
+
+```{r}
+reduced <- play.data %>% select(name,player,time) 
+
+game.game.df <- reduced %>% inner_join(reduced, by=c("player")) %>% select(name.x, name.y, time.x) %>% filter(name.x != name.y) %>%
+  group_by(name.x,name.y) %>% summarise(absTime = sum(time.x), avgTime = sum(time.x)/n(),
+                                        avgTimeCorrected = (sum(time.x))/(n()+5), sharedUserbase = n()) %>%
+  arrange(desc(sharedUserbase)) 
+
+game.game.relation <- game.game.df %>% rename(from = name.x, to = name.y)  
+
+# uso "games" che contiene i nomi dei giochi
+game.game.graph <- graph_from_data_frame(game.game.relation, vertices=games, directed=TRUE) %>%
+  as_tbl_graph() %>%
+  mutate(centrality = centrality_authority())
+
+
+# riduco il grafo per poterlo rappresentare
+game.game.graph.subgraph <- to_subgraph(game.game.graph, sharedUserbase >= 100, subset_by = "edges")$subgraph 
+V(game.game.graph.subgraph)$degree = unlist(as.data.frame(degree(game.game.graph.subgraph)))
+game.game.graph.subgraph <- to_subgraph(game.game.graph.subgraph, degree > 0, subset_by = "nodes")$subgraph 
+
+
+ggraph(game.game.graph.subgraph, layout="kk") + 
+  geom_edge_link(aes(alpha=sharedUserbase), color="darkgrey") +
+  geom_node_point(aes(size = centrality, color=log(totalGameTime))) +
+  geom_node_label( aes( filter = centrality > 0.97, label = name), color = "black", size = 2.5, repel=TRUE ) +
+  labs(title = "Rete giochi/giochi per utenza condivisa")
+
+```
+
+
+
+Proviamo a rappresentare il tutto in modo più chiaro utilizzando un chord graph.
+```{r, message=FALSE}
+
+e <- as_data_frame(game.game.graph.subgraph) %>% select(from,to,sharedUserbase)
+good.names <- as.data.frame(game.game.graph.subgraph) %>% filter(centrality > 0.97) %>% select(name) %>% unique()
+good.names
+
+usercounts <- as.data.frame(game.game.graph.subgraph) %>% 
+  full_join(e, by = c("name"="from")) %>%
+  filter(centrality > 0.97) %>% select(name, sharedUserbase) %>% group_by(name) %>% summarise(n = sum(sharedUserbase))  
+
+usercounts
+
+circos.clear()
+
+chordDiagram(e,annotationTrack = "grid", preAllocateTracks = 1)
+  
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+  xlim = get.cell.meta.data("xlim")
+  ylim = get.cell.meta.data("ylim")
+  sector.name = ifelse( get.cell.meta.data("sector.index") %in% good.names$name, gsub(" ","\n",get.cell.meta.data("sector.index")) , "")  
+  circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(0, 0.5), col = "black", cex = 0.5)
+}, bg.border = NA)
+
+circos.trackPlotRegion(track.index = 2, panel.fun = function(x, y) {
+  xlim = get.cell.meta.data("xlim")
+  ylim = get.cell.meta.data("ylim")
+  sector.name = ifelse( get.cell.meta.data("sector.index") %in% good.names$name, 
+                        (usercounts %>% filter(name == get.cell.meta.data("sector.index")))[1,"n"] %>% as.numeric() %>% as.character(),
+                        "")  
+  circos.text(CELL_META$xcenter, CELL_META$ycenter, sector.name, col = "white", cex = 0.45)
+}, bg.border = NA)
+
+circos.clear()
+```
+
+Questo grafico mostra l'intensità dello scambio di utenti fra i diversi giochi, esattamente come il precedente.
+Le relazioni sono ripetute due volte in modo da poter visualizzare sia il flusso in entrata che in uscita. I numeri di colore bianco rappresentano il numero
+totale di giocatori giocanti al gioco rappresentato dal segmento colorato che giocano ad un altro (specifico) gioco.
+
+## Analisi preliminare del dataset dei giochi presenti su Steam
+
+Entriamo ora nel merito delle informazioni contenute nel dataset dei giochi presenti su Steam e cerchiamo di comprendere al meglio la sua composizione al fine
+di poter usare questi dati come base per la realizzazione di un sistema per consigliare giochi nuovi da giocare. Questa è la struttura generale del dataset: 
+
+```{r}
+games.data
+```
+
+Consideriamo ora la distribuzione dei giochi per anno di uscita:
+
+```{r}
+
+df <- games.data %>% 
+    select (name, release_date) %>%
+    mutate(year = format(release_date, "%Y")) %>%
+    select(name,year) 
+    
+ggplot(df) +
+  geom_bar(aes(x=year, fill=log(..count..)), col="black") + 
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  labs(title = "Disribuzione giochi per data di uscita") +
+  ylab("Numero") + 
+  xlab("Anno") 
+```
+
+come si può osservare, il numero di giochi sembra aumentare a un ritmo quasi esponenziale (i dati del 2019 sono parziali).
+
+A questo punto è naturale porsi una classica domanda. Erano più belli i giochi più vecchi? Condsideriamo le valutazioni dei giocatori (in verde) e 
+la loro mappa in voto (in blu), calcolata con il dataset di Metacritic. 
+
+```{r, message=FALSE}
+df <- games.data %>% 
+    select (name, release_date, positive_ratings, negative_ratings) %>%
+    # mantieni solo i giochi con un po' di valutazioni
+    filter(positive_ratings+negative_ratings >= 1) %>% 
+    mutate(year = format(release_date, "%Y")) %>%
+    mutate(release_date = format(release_date)) %>%
+    mutate(score = 100*positive_ratings / (positive_ratings + negative_ratings) ) %>%
+    mutate(adj_mark = positive.ratio.to.mark(score)) %>%
+    select(name,release_date,score,adj_mark,year,positive_ratings,negative_ratings) 
+
+# tutto
+ggplot(df) +
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", alpha=0.1) + 
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="lightblue", alpha=0.1) +
+  geom_boxplot(aes(x = year %>% as.POSIXct(format="%Y") %>% as.numeric(), group=year, y=score), alpha=0.9) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", linetype="dashed") +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", linetype="dashed") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  scale_x_continuous(breaks = df$year %>% as.POSIXct(format="%Y") %>% as.numeric() %>% unique(), labels=unique(df$year)) +
+  labs(title = "Disribuzione giochi per data di uscita (tutti)") +
+  ylab("Valutazione o Voto simulato") + 
+  xlab("Anno") 
+
+# almeno 100 valutazioni
+df <- df %>% filter(positive_ratings+negative_ratings >= 100) 
+
+ggplot(df) +
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", alpha=0.1) + 
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="lightblue", alpha=0.1) +
+  geom_boxplot(aes(x = year %>% as.POSIXct(format="%Y") %>% as.numeric(), group=year, y=score), alpha=0.9) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", linetype="dashed") +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", linetype="dashed") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  scale_x_continuous(breaks = df$year %>% as.POSIXct(format="%Y") %>% as.numeric() %>% unique(), labels=unique(df$year)) +
+  labs(title = "Disribuzione giochi per data di uscita (> 100 valutazioni)") +
+  ylab("Valutazione o Voto simulato") + 
+  xlab("Anno") 
+
+# almeno 500
+df <- df %>% filter(positive_ratings+negative_ratings >= 500) 
+
+ggplot(df) +
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", alpha=0.1) + 
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="lightblue", alpha=0.1) +
+  geom_boxplot(aes(x = year %>% as.POSIXct(format="%Y") %>% as.numeric(), group=year, y=score), alpha=0.9) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", linetype="dashed") +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", linetype="dashed") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  scale_x_continuous(breaks = df$year %>% as.POSIXct(format="%Y") %>% as.numeric() %>% unique(), labels=unique(df$year)) +
+  labs(title = "Disribuzione giochi per data di uscita (> 500 valutazioni)") +
+  ylab("Valutazione o Voto simulato") + 
+  xlab("Anno") 
+
+# almeno 2000
+df <- df %>% filter(positive_ratings+negative_ratings >= 2000) 
+
+ggplot(df) +
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", alpha=0.1) + 
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="lightblue", alpha=0.1) +
+  geom_boxplot(aes(x = year %>% as.POSIXct(format="%Y") %>% as.numeric(), group=year, y=score), alpha=0.9) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", linetype="dashed") +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", linetype="dashed") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  scale_x_continuous(breaks = df$year %>% as.POSIXct(format="%Y") %>% as.numeric() %>% unique(), labels=unique(df$year)) +
+  labs(title = "Disribuzione giochi per data di uscita (> 2000 valutazioni)") +
+  ylab("Valutazione o Voto simulato") + 
+  xlab("Anno") 
+
+```
+
+Si osserva che, considerando i giochi in generale, cioè non valutando il numero di recensioni date dai clienti, il risultato sembra essere costante.
+Selezionando invece per numero di valutazioni, i voti tendono invece a scendere.
+Si potrebbe pensare che i giochi recenti abbiano più valutazioni e che siano valutati in modo peggiore per questo,
+ma ciò non è giustificato dall'aumento delle valutazioni che invece sembra avere un impatto positivo sul voto finale:
+
+```{r, message=FALSE}
+ggplot(games.data) +
+  geom_point(aes(x = positive_ratings+negative_ratings, y=100*positive_ratings/(positive_ratings+negative_ratings)), alpha=0.4) + 
+  geom_smooth(aes(x = positive_ratings+negative_ratings, y=100*positive_ratings/(positive_ratings+negative_ratings))) + 
+  labs(title = "valutazioni vs % valutazioni positive") +
+  ylab("Valutazione") + 
+  xlab("Numero di valutazioni") +
+  scale_x_log10()
+```
+
+La risposta probabilmente sta nel fatto che, come detto precedentemente, il numero di giochi presenti sul mercato è aumentato molto, in particolare dando la possibilità
+agli sviluppatori indipendenti di poter pubblicare i propri giochi che, solitamente, hanno fondi inferiori alle produzioni più grandi. Proviamo questa teoria eliminando dalla selezione i giochi che vengono classificati come "indie", sfruttando i tag presenti nel dataset considerato.
+
+```{r}
+# INDIE
+df <- games.data %>% 
+    filter.by.tag.or(steamspy_tags, "Indie") %>%
+    select (name, release_date, positive_ratings, negative_ratings) %>%
+    # mantieni solo i giochi con un po' di valutazioni
+    filter(positive_ratings+negative_ratings >= 1) %>% 
+    mutate(year = format(release_date, "%Y")) %>%
+    mutate(release_date = format(release_date)) %>%
+    mutate(score = 100*positive_ratings / (positive_ratings + negative_ratings) ) %>%
+    mutate(adj_mark = positive.ratio.to.mark(score)) %>%
+    select(name,release_date,score,adj_mark,year,positive_ratings,negative_ratings)  
+
+df <- df %>% filter(positive_ratings+negative_ratings >= 500) 
+
+ggplot(df) +
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", alpha=0.1) + 
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="lightblue", alpha=0.1) +
+  geom_boxplot(aes(x = year %>% as.POSIXct(format="%Y") %>% as.numeric(), group=year, y=score), alpha=0.9) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", linetype="dashed") +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", linetype="dashed") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  scale_x_continuous(breaks = df$year %>% as.POSIXct(format="%Y") %>% as.numeric() %>% unique(), labels=unique(df$year)) +
+  labs(title = "Disribuzione giochi per data di uscita (> 500 valutazioni) Indie") +
+  ylab("Valutazione o Voto simulato") + 
+  xlab("Anno") 
+
+# non INDIE
+df <- games.data %>% 
+    filter.by.tag.negated.or(steamspy_tags, "Indie") %>%
+    select (name, release_date, positive_ratings, negative_ratings) %>%
+    # mantieni solo i giochi con un po' di valutazioni
+    filter(positive_ratings+negative_ratings >= 1) %>% 
+    mutate(year = format(release_date, "%Y")) %>%
+    mutate(release_date = format(release_date)) %>%
+    mutate(score = 100*positive_ratings / (positive_ratings + negative_ratings) ) %>%
+    mutate(adj_mark = positive.ratio.to.mark(score)) %>%
+    select(name,release_date,score,adj_mark,year,positive_ratings,negative_ratings)  
+
+df <- df %>% filter(positive_ratings+negative_ratings >= 500) 
+
+ggplot(df) +
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", alpha=0.1) + 
+  geom_point(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="lightblue", alpha=0.1) +
+  geom_boxplot(aes(x = year %>% as.POSIXct(format="%Y") %>% as.numeric(), group=year, y=score), alpha=0.9) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", method = "lm", formula = y~x) +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=score), col="darkgreen", linetype="dashed") +
+  geom_smooth(aes(x = release_date %>% as.POSIXct() %>% as.numeric(), y=adj_mark), col="blue", linetype="dashed") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  scale_x_continuous(breaks = df$year %>% as.POSIXct(format="%Y") %>% as.numeric() %>% unique(), labels=unique(df$year)) +
+  labs(title = "Disribuzione giochi per data di uscita (> 500 valutazioni) Non Indie") +
+  ylab("Valutazione o Voto simulato") + 
+  xlab("Anno") 
+```
+
+Sorprendentemente invece, osserviamo proprio un comportamento opposto. Quindi i giochi indie non sembrano responsabili del peggioramento delle valutazioni degli 
+utenti. Nonostante queste valutazioni non abbiamo però modo di dire se effettivamente, siano peggiorati i giochi oppure sia diventata più selettiva l'utenza. 
+E'anche possibile che si verifichi un effetto "nostalgia" che porta a valutazioni più alte, effettuate in tempi recenti, di giochi più vecchi, ma non avendo
+dati su quando le recensioni sono state effettuate decidiamo di chiudere qui questa digressione e di proseguire analizzando altri aspetti di questo datatset,
+come i tag steamspy che abbiamo usato già in questa analisi.
+
+### Case produttrici
+
+Diamo un breve sguardo alle case produttrici presenti su Steam:
+
+```{r}
+df <- games.data %>% 
+    select (name, developer) %>%
+    select(name,developer)  
+
+# con più giochi
+df %>% group_by(developer) %>% summarise(n=n()) %>% arrange(desc(n)) %>% head(10) %>% rename(games=n)
+
+# con i giochi più giocati
+play.data %>% select(name, developer) %>% group_by(developer) %>% summarise(n=n()) %>% arrange(desc(n)) %>% head(10) %>%
+  rename(players=n)
+
+# con i giochi più giocati in termini di tempo
+play.data %>% select(name, developer, time) %>% group_by(developer) %>% summarise(n=sum(time)) %>% arrange(desc(n)) %>% head(10) %>%
+  rename(absolute_time=n)
+
+# con il tempo medio di gioco più alto
+play.data %>% select(name, developer, time) %>% group_by(developer) %>% summarise(n=mean(time)) %>% arrange(desc(n)) %>% head(10) %>% 
+  rename(mean_time=n)
+
+# con il tempo medio di gioco più alto (e almeno 10 giocatori)
+play.data %>% select(name, developer, time) %>% group_by(developer) %>% summarise(n=mean(time)) %>% arrange(desc(n)) %>% 
+    semi_join(play.data %>% select(name, developer) %>% group_by(developer) %>% summarise(n=n()) %>% filter(n>=10) , c("developer") ) %>%
+    rename(mean_time=n) %>% head(10)
+
+# producers con più giochi
+df %>% group_by(developer) %>% summarise(n=n()) %>% arrange(desc(n)) %>% head(10)
+```
+
+### Platforms
+
+Da anni Windows si è dimostrata la piattaforma riferimento per il gioco sul PC. Gradualmente le aziende stanno iniziando
+a portare i loro giochi anche su altre piattaforme, sia per espandere il loro mercato, che per slegarsi dall'azienda Microsoft
+per la vendita dei loro prodotti. Questa è la situazione attuale:
+
+```{r}
+df <- games.data %>% select(name, platforms) %>% 
+    unnest(platforms) 
+
+nWin <- df %>% filter(platforms == "windows") %>% group_by(platforms) %>% summarise(n = n()) 
+nWin <- as.numeric(nWin[1,"n"])
+nWin
+
+ggplot(df) + 
+    geom_bar(aes(x=platforms, y=..count../nWin, fill=platforms))
+```
+
+Osserviamo quindi la scansione temporale:
+
+```{r}
+df <- games.data %>% mutate(year = format(release_date, "%Y")) %>% unnest(platforms)
+
+ggplot(df) + 
+  geom_bar(aes(fill=platforms, x=year, group=platforms), position = "fill", color="black") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  labs(title = "Giochi per piattaforma nel tempo") +
+  ylab("Numero di giochi") + 
+  xlab("Anno") 
+
+```
+
+Si noti che è possibile che i giochi non escano già al lancio su tutte le piattaforme. Interessante osservare negli ultimi 5 anni una riduzione nella percentuale
+dei giochi disponibili su altre piattaforme. 
+
+> Ovviamente ci sono diversi interessi economici sia per Microsoft che per le aziende produttrici di Hardware dedicato alla video grafica,
+(Intel, AMD, Nvidia principalmente), che rendono ancora più complessa la situazione essendo esse responsabili della produzione dei 
+driver necessari alla gestione delle GPU. 
+
+### Tags
+
+Proviamo ad analizzare le tag offerte da Steam per la classificazione dei giochi :
+
+```{r}
+df <- games.data %>% select(name, categories) %>% 
+    unnest(categories) 
+
+ggplot(df) + 
+  geom_bar(aes(x=categories, fill=categories)) +
+  theme(axis.text.x=element_blank()) +
+  labs(title = "Analisi dei Tag Steam") +
+  ylab("Numero di giochi con la data tag") + 
+  xlab("Tag categories") 
+```
+
+Il campo tag quindi contiene per la maggior parte informazioni di carattere tecnico, sono abbastanza interessanti i tag relativi alle modalità di gioco: 
+Co-op, Online Multi-Player, Single-player, Online Co-op.
+
+### Categorie di genere
+
+Le categorie di genere invece hanno un carattere prettamente legato ai contenuti presenti nei giochi. Non solo sono presenti 
+tag relative quindi a veri e propri generi come RPG (gioco di ruolo) o Strategia, ma anche altre per la calssificazione per età,
+come violent o sexual content.
+
+```{r}
+df <- games.data %>% select(name, genres) %>% 
+    unnest(genres) 
+
+sel <- games.data %>% 
+    select(name, genres) %>% 
+    unnest(genres) %>%
+    group_by(genres) %>%
+    summarise(n = n()) %>%
+    arrange(desc(n)) %>%
+    head(7)
+
+ggplot(df) + 
+  geom_bar(aes(x=genres, fill=genres)) +
+  theme(axis.text.x=element_blank()) +
+  labs(title = "Analisi delle categorie (completo)") +
+  ylab("Numero di giochi con la data tag") + 
+  xlab("Genre categories") 
+
+ggplot(df %>% semi_join(sel, by=c("genres"))) + 
+  geom_bar(aes(x=genres, fill=genres)) +
+  theme(axis.text.x=element_blank()) +
+  labs(title = "Analisi delle categorie (prime sette)") +
+  ylab("Numero di giochi con la data tag") + 
+  xlab("Genre categories") 
+```
+
+Infine, steamspy (il software utilizzato per l'acquisizione del dataset) offre delle ulteriori classificazioni:
+
+```{r}
+df <- games.data %>% select(name, steamspy_tags) %>% 
+    unnest(steamspy_tags) 
+
+# selezione dei 10 tag più frequenti
+sel <- games.data %>% 
+    select(name, steamspy_tags) %>% 
+    unnest(steamspy_tags) %>%
+    group_by(steamspy_tags) %>%
+    summarise(n = n()) %>%
+    arrange(desc(n)) %>%
+    head(10)
+
+# i tag sono davvero molti
+df %>% select(steamspy_tags) %>% unique() %>% arrange(steamspy_tags)
+
+ggplot(df %>% semi_join(sel, by=c("steamspy_tags"))) + 
+  geom_bar(aes(x=steamspy_tags, fill=steamspy_tags)) +
+  theme(axis.text.x=element_blank()) +
+  labs(title = "Analisi dei Tag Steamspy") +
+  ylab("Numero di giochi con la data tag") + 
+  xlab("Tag categories") 
+```
+
+Questa collezione di tag è effettivamente la più flessibile ed effettivamente valuta in dettaglio le caratteristiche associate ai diversi giochi. Si nota comunque l'alto numero di giochi realizzati da sviluppatori indipendenti.
+
+### I giochi free to play nel tempo
+
+Una tipologia di giochi che si è gradualmente affermata negli ultimi dieci anni sono i giochi *free to play* (F2P). In questa categoria rientrano i giochi veramente gratuiti spesso realizzati da sviluppatori indipendenti per diletto, appartenenti alla categoria dei freeware (si prenda come esempio [Cave Story](https://en.wikipedia.org/wiki/Cave_Story)), e giochi con modello di business basato sulle microtransazioni "in game", di cui abbiamo già in parte accennato. L'idea alla base di quest'ultimo approccio è quella di permettere facilmente la creazione di una vasta userbase, con la speranza che effettivamente alcuni dei giocatori usino le microtransazioni proposte. 
+
+> Come tutti i modelli economici, quello dei giochi F2P ha pregi e difetti e si adatta particolarmente bene ai giochi competitivi, per i quali sono frequentemente organizzati tornei anche di carattere internazionale (i cosidetti e-sports). Anche in questo caso, non sempre le case produttrici si comportano in modo etico rispetto ai consumatori e,
+specialmente in certi contesti, questa pratica è molto discussa e, secondo me, discutibile.
+
+
+```{r}
+games.data
+# Sviluppo dei giochi F2P nel tempo
+dff2p <- games.data %>% select(name, release_date, steamspy_tags) %>% 
+  filter.by.tag.or(steamspy_tags, "Free to Play") %>% 
+  mutate(year = format(release_date, "%Y")) %>%
+  mutate(f2p = TRUE) 
+
+dfall <- games.data %>% select(name, release_date, steamspy_tags) %>% 
+  filter.by.tag.negated.or(steamspy_tags, "Free to Play") %>%
+  filter.by.tag.negated.or(steamspy_tags, "Indie") %>%
+  mutate(year = format(release_date, "%Y")) %>%
+  mutate(f2p = FALSE)  
+
+df <- rbind(dfall, dff2p)
+
+ggplot(df) +
+  geom_bar(aes(x = year, fill=f2p), position = "dodge") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  labs(title = "Analisi dei giochi free to play") +
+  ylab("Numero di giochi") + 
+  xlab("Anno")
+
+```
+
+Nel conteggio dei giochi non F2P sono stati rimossi i giochi Indie, in quanto si è già mostrato che anche quelli presentano un forte incremento nel tempo.
+
+## Considerazioni sui dataset uniti
+
+Unendo i dataset dei giocatori con quello dei giochi possiamo ottenere informazioni più specifiche sul campione di giocatori analizzato,
+per esempio calcolando il tempo medio di gioco per i generi principali:
+
+```{r}
+
+df <- play.data %>% select(player, name, genres, time) %>% 
+    unnest(genres) 
+
+sel <- as.data.frame(c("Action", "Adventure", "Casual", "Massively Multiplayer", "Racing", "RPG", "Simulation", "Sports", "Strategy"))
+colnames(sel)<-c("genres")
+sel
+
+means <- df %>% semi_join(sel, by=c("genres")) %>% group_by(genres) %>% summarise(m = mean(time)) 
+
+ggplot(df %>% semi_join(sel, by=c("genres"))) + 
+  geom_boxplot(aes(x=genres, y=time, col=genres)) +
+  geom_point(data = means, aes(x=genres, y=m), col="red") +
+  theme(axis.text.x=element_blank()) +
+  labs(title = "Analisi del tempo di gioco per genere (campione selezionato)") +
+  ylab("Tempo di gioco") + 
+  xlab("Genere") + 
+  scale_y_log10()
+
+```
+
+I punti rossi mostrano la media e come questa sia decisamente superiore rispetto alla mediana indicata nei boxplot, si noti che la scala per le y è logaritmica. Come ci si 
+potrebbe aspettare, i giochi strategici sono quelli con il tempo medio di gioco più alto, mentre gli RPG presentano il maggior tempo mediano (probabilmente poichè raccontano una storia normalmente più lunga e complessa rispetto agli altri giochi). Si tenga presente che alcuni giochi sicuramente appaiono in più di una categoria.
+
+### Dollari per ora di gioco
+
+Valutiamo ora in linea teorica (cioè basandci sul prezzo di listino) il "costo dell'intrattenimento" offerto dai diversi giochi utilizzati dal campione di giocatori considerato.
+Consideriamo esclusivamente i giochi che hanno un vero e proprio prezzo (quindi non freeware o free to play):
+
+```{r}
+
+# almeno 5 giocatori
+sel <- play.data %>% select(player,name) %>% group_by(name) %>% summarise(n = n()) %>% filter(n>5)
+df <- play.data %>% select(player,name,time,price) %>% group_by(name,price) %>% summarise(avgTime = mean(time), n=n()) %>% select(name,avgTime,price,n) %>% filter(price>0)
+df <- semi_join(df,sel,by=c("name"))
+
+  
+ggplot(df) +
+  geom_point(aes(x=avgTime, y=price, alpha=log(n)), col="darkgreen") + 
+  geom_smooth(aes(x=avgTime, y=price), method='glm', method.args=list(family=gaussian(link="log"))) +
+  geom_node_text( aes(x=avgTime, y=price,filter = (avgTime > 200 | price>35), label = name), color = "black", size = 3, repel=TRUE) +
+  geom_vline(aes(xintercept=mean(df$avgTime)), col="red", linetype="dashed") +
+  geom_hline(aes(yintercept=mean(df$price)), col="red", linetype="dashed") +
+  labs(title = "'Costo medio' delle ore di gioco") +
+  xlab("Tempo medio di gioco") + 
+  ylab("Prezzo") + guides(alpha=guide_legend(title="log(giocatori)"))
+
+# log scale
+ggplot(df) +
+  geom_point(aes(x=avgTime, y=price, alpha=log(n)), col="darkgreen") + 
+  scale_x_log10() +
+  scale_y_log10() +
+  geom_smooth(aes(x=avgTime, y=price), method='lm', formula= y~x) +
+  geom_node_text( aes(x=avgTime, y=price,filter = (avgTime > 200 | price>35), label = name), color = "black", size = 3, repel=TRUE ) +
+  geom_vline(aes(xintercept=mean(df$avgTime)), col="red", linetype="dashed") +
+  geom_hline(aes(yintercept=mean(df$price)), col="red", linetype="dashed") +
+  labs(title = "'Costo medio' delle ore di gioco") +
+  xlab("Tempo medio di gioco") + 
+  ylab("Prezzo") + guides(alpha=guide_legend(title="log(giocatori)"))
+
+```
+
+C'è una certa correlazione tra tempo di gioco e prezzo. Si noti in ogni caso che il prezzo di listino è molto indicativo e sovrastimato. Steam offre a cadenza stagionale dei 
+periodi di saldi, ove il prezzo dei giochi vene notevolmente scontato (in modo del tutto analogo a quanto accade nei saldi tradizionali per il vestiario). In particolare
+si osserva un netto calo del prezzo dei giochi nel tempo (questa affermazione non si applica a certi casi particolari, ma normalmente è vera).
+
+### Il ruolo degli achievements
+
+Avevamo accennato precedentemente alla possibilità dei giochi di avere o meno l'integrarzione del sistema ad obiettivi di Steam. Ci si può chiedere se 
+la loro presenza abbia un impatto positivo sul tempo di gioco.
+
+```{r}
+# giochi con più di cinque giocatori
+time.info <-  play.data %>%
+  select(player,name,time) %>%
+  group_by(name) %>% 
+  summarise(n = n(), avgTime = sum(time)/n()) %>% filter(n>5)
+
+df <- games.data %>% 
+  filter(as.numeric(achievements)>0) %>%
+  inner_join( time.info, by=c("name") ) %>%
+  mutate(achievements = as.numeric(achievements)) %>%
+  factorise(achievements, c(seq(1,100,10),Inf))
+
+ggplot(df) +
+  geom_boxplot(aes(y=avgTime,x=achievements)) + 
+  theme(axis.text.x=element_text(angle=45, hjust=1)) 
+
+
+df1 <- games.data %>% 
+  inner_join( time.info, by=c("name") ) %>%
+  filter(achievements!="0") %>% 
+  mutate(ach = TRUE)
+
+df2 <- games.data %>%
+  inner_join( time.info, by=c("name") ) %>%
+  filter(achievements=="0") %>% 
+  mutate(ach = FALSE)
+
+ggplot(rbind(df1,df2)) + 
+  geom_boxplot( aes(x=avgTime, y=ach) ) +
+  scale_x_log10() +
+  labs(title = "Tempo di gioco medio e presenza di obiettivi") +
+  xlab("Tempo medio di gioco") + 
+  ylab("Gli obbiettivi sono presenti?") 
+
+```
+
+Valutiamo se la differenza è significativa, assumiamo l'indipendenza dei campioni (anche se questa può essere un'approssimazione in certe circostanze):
+
+```{r}
+length(df1$avgTime)
+length(df2$avgTime)
+mean(df1$avgTime)
+var(df1$avgTime)
+mean(df2$avgTime)
+var(df2$avgTime)
+shapiro.test(df1$avgTime)
+shapiro.test(df2$avgTime)
+```
+
+
+Le varianze non sono uguali e le distribuzioni non sono normali, non possiamo quindi utilizzare il test di Welch ma utilizziamo invece lo z-test per
+la differenza delle medie campionarie dato che il campione è ragionevolmente grande:
+
+```{r}
+x <- df1$avgTime
+y <- df2$avgTime
+mu.x <- mean(df1$avgTime)
+sigma.x <- sd(df1$avgTime)
+mu.y <- mean(df2$avgTime)
+sigma.y <- sd(df2$avgTime)
+SE.x <- sigma.x/sqrt(length(x))
+SE.y <- sigma.x/sqrt(length(y))
+SED <- sqrt(SE.x^2+SE.y^2)
+z.statistic <- (mu.x-mu.y)/SED
+# test 2-sided
+p.value <- 2*pnorm(-abs(z.statistic))
+p.value
+```
+
+Il p-value ci indica che la differenza non risulta essere significativa. Per rifermiento, anche il p-value che si sarebbe ottenuto mediante il test
+di Welch non sarebbe risultato significativo, anche se migliore:
+
+```{r}
+t.test(x,y)
+```
+
+Quindi non sembra che ci sia un vero e proprio contributo dato dal sistema a obiettivi di Steam.
+
+## Analisi in dettaglio sulle reti giochi e giocatori:
+
+Ora possiamo arrichire l'analisi effettuata sulle reti usando le informazioni disponibili grazie agli altri dataset, si noti che i grafi arrichiti erano già stati 
+creati in precedenza:
+
+```{r}
+game.game.graph
+players.games.graph
+```
+
+### Considerazioni sulla centralità
+
+Per valutare in modo più approfondito quali siano i giochi che giocano un ruolo di spicco nella formazione della struttura di queste reti sociali, 
+proviamo a valutare la centralità utilizzando diverse metriche, in modo da osservarne meglio le differenze dal punto di vista del significato
+degli stessi valori calcolati. Effettuiamo l'analisi considerando la userbase condivisa, sarebbe possibile valutare eventuali variazioni applicando lo stesso approccio 
+con tempo medio e assoluto di gioco:
+
+```{r}
+katz.eigenval.sharedUserbase <- max(eigen(as_adjacency_matrix(game.game.graph))$values)
+```
+
+```{r}
+# calcolo delle centralità
+game.game.graph.with.metrics.sharedUserbase <- game.game.graph    %>%
+  mutate(degree_centrality = centrality_degree(weights = sharedUserbase))  %>%
+  #mutate(closeness_centrality = centrality_closeness(weights = sharedUserbase)) %>% --- il grafo deve essere conn ---
+  mutate(betweeness_centrality = centrality_betweenness(weights = sharedUserbase)) %>%
+  mutate(eigen_centrality = centrality_eigen(weights = sharedUserbase)) %>%
+  mutate(katz_centrality = centrality_alpha(weights = sharedUserbase, alpha = 0.15/katz.eigenval.sharedUserbase)) %>% 
+  mutate(pagerank_centrality = centrality_pagerank(weights = sharedUserbase)) %>%
+  mutate(hub_centrality = centrality_hub(weights = sharedUserbase)) %>%
+  mutate(authority_centrality = centrality_authority(weights = sharedUserbase))
+```
+
+```{r}
+# preparazione per la visualizzazione del valore delle metriche di centralità secondo i rank
+a <- game.game.graph.with.metrics.sharedUserbase %>% arrange(desc(degree_centrality)) %>% select(name,degree_centrality) %>% as.data.frame()
+b <- game.game.graph.with.metrics.sharedUserbase %>% arrange(desc(betweeness_centrality)) %>% select(name,betweeness_centrality) %>% as.data.frame()
+c <- game.game.graph.with.metrics.sharedUserbase %>% arrange(desc(eigen_centrality)) %>% select(name,eigen_centrality) %>% as.data.frame()
+d <- game.game.graph.with.metrics.sharedUserbase %>% arrange(katz_centrality) %>% select(name,katz_centrality) %>% as.data.frame() 
+e <- game.game.graph.with.metrics.sharedUserbase %>% arrange(desc(pagerank_centrality)) %>% select(name,pagerank_centrality) %>% as.data.frame() 
+f <- game.game.graph.with.metrics.sharedUserbase %>% arrange(desc(hub_centrality)) %>% select(name,hub_centrality) %>% as.data.frame() 
+g <- game.game.graph.with.metrics.sharedUserbase %>% arrange(desc(authority_centrality)) %>% select(name,authority_centrality) %>% as.data.frame()
+
+centralities.sharedUserbase <- game.game.graph.with.metrics.sharedUserbase %>% 
+  select(name,degree_centrality, betweeness_centrality, eigen_centrality, katz_centrality,
+         pagerank_centrality, hub_centrality, authority_centrality) %>%
+  as.data.frame()
+
+a.rk <- a %>% mutate(rank = 1:nrow(a)) %>% mutate(type = colnames(a)[2]) %>% rename(value = 2) %>% select(value,rank,type) 
+b.rk <- b %>% mutate(rank = 1:nrow(b)) %>% mutate(type = colnames(b)[2]) %>% rename(value = 2) %>% select(value,rank,type)
+c.rk <- c %>% mutate(rank = 1:nrow(c)) %>% mutate(type = colnames(c)[2]) %>% rename(value = 2) %>% select(value,rank,type)
+d.rk <- d %>% mutate(rank = 1:nrow(d)) %>% mutate(type = colnames(d)[2]) %>% rename(value = 2) %>% select(value,rank,type)
+e.rk <- e %>% mutate(rank = 1:nrow(e)) %>% mutate(type = colnames(e)[2]) %>% rename(value = 2) %>% select(value,rank,type)
+f.rk <- f %>% mutate(rank = 1:nrow(f)) %>% mutate(type = colnames(f)[2]) %>% rename(value = 2) %>% select(value,rank,type)
+g.rk <- g %>% mutate(rank = 1:nrow(g)) %>% mutate(type = colnames(g)[2]) %>% rename(value = 2) %>% select(value,rank,type)
+
+# divido i plot per la rappresentazione
+df1 <- rbind(a.rk,b.rk,c.rk)
+df2 <- rbind(d.rk,e.rk)
+df3 <- rbind(f.rk,g.rk)
+
+ggplot(df1) + 
+  geom_line(aes(x=rank, y=value)) +
+  facet_grid(rows = vars(type), scales = "free_y")
+# simile per gli altri plot
+
+ggplot(df2) + 
+  geom_line(aes(x=rank, y=value)) +
+  facet_grid(rows = vars(type), scales = "free_y")
+
+ggplot(df3) + 
+  geom_line(aes(x=rank, y=value)) +
+  facet_grid(rows = vars(type), scales = "free_y")
+```
+
+Per fare un confronto più uniforme, valutiamo direttamente gli ordinamenti ottenuti grazie all'uso di queste metriche:
+
+```{r}
+a.rk.name <- a %>% mutate(rank = 1:nrow(a)) %>% mutate(type = colnames(a)[2]) %>% rename(value = 2) %>% select(name,rank) 
+b.rk.name <- b %>% mutate(rank = 1:nrow(b)) %>% mutate(type = colnames(b)[2]) %>% rename(value = 2) %>% select(name,rank)
+c.rk.name <- c %>% mutate(rank = 1:nrow(c)) %>% mutate(type = colnames(c)[2]) %>% rename(value = 2) %>% select(name,rank)
+d.rk.name <- d %>% mutate(rank = 1:nrow(d)) %>% mutate(type = colnames(d)[2]) %>% rename(value = 2) %>% select(name,rank)
+e.rk.name <- e %>% mutate(rank = 1:nrow(e)) %>% mutate(type = colnames(e)[2]) %>% rename(value = 2) %>% select(name,rank)
+f.rk.name <- f %>% mutate(rank = 1:nrow(f)) %>% mutate(type = colnames(f)[2]) %>% rename(value = 2) %>% select(name,rank)
+g.rk.name <- g %>% mutate(rank = 1:nrow(g)) %>% mutate(type = colnames(g)[2]) %>% rename(value = 2) %>% select(name,rank)
+
+
+df.rk.name <- inner_join(a.rk.name,b.rk.name, by=c("name")) %>%
+  inner_join(c.rk.name, by=c("name")) %>%
+  inner_join(d.rk.name, by=c("name")) %>%
+  inner_join(e.rk.name, by=c("name")) %>%
+  inner_join(f.rk.name, by=c("name")) %>%
+  inner_join(g.rk.name, by=c("name")) 
+
+colnames(df.rk.name) <- c("name","degree_centrality", "betweeness_centrality",
+                          "eigen_centrality", "katz_centrality",
+                          "pagerank_centrality", "hub_centrality",
+                          "authority_centrality")
+  
+df.rk.name
+
+```
+
+
+Valutiamo le differenze tra gli ordini creati da queste diverse misure di centralità tra loro:
+
+
+```{r, message=FALSE}
+
+diff.df.sharedUserbase <- df.rk.name %>% select(name)
+
+for(i in colnames(df.rk.name)){
+  for(j in colnames(df.rk.name)){
+    if(i!="name" & j!="name" & i!=j & i>j){
+      name <- paste(i,"VS\n",j)
+      col <- abs(df.rk.name[,i]-df.rk.name[,j])
+      diff.df.sharedUserbase[name] <- col
+    }
+  }
+}
+
+diff.df.sharedUserbase
+
+pos <- 2:length(colnames(diff.df.sharedUserbase))
+ggplot(diff.df.sharedUserbase %>% gather(pos, key="Confronto", value="Differenza")) +
+  geom_boxplot(aes(x=Confronto,y=Differenza)) +
+  theme(axis.text.x=element_text(angle=75, hjust=1, size = 6)) +
+  labs(title = "Confronto posizioni nell'ordine di centralità") +
+  ylab("Differenza") + 
+  xlab("Confronto") 
+
+pos <- 2:length(colnames(diff.df.sharedUserbase))
+ggplot(diff.df.sharedUserbase %>% gather(pos, key="Confronto", value="Differenza")) +
+  geom_boxplot(aes(x=Confronto,y=Differenza)) +
+  theme(axis.text.x=element_text(angle=75, hjust=1, size = 6)) +
+  labs(title = "Confronto posizioni nell'ordine di centralità") +
+  ylab("Differenza") + 
+  xlab("Confronto") +
+  coord_cartesian(y=c(0,400))
+
+```
+
+Da questo grafico si osserva che le centralità hub e authority sono identiche (la rete non è diretta),
+si sono evitati i confronti simmetrici in quanto la differenza è stata calcolata in valore assoluto.
+
+Dato che tutte le altre centralità mostrano risultati leggermente diversi, possiamo considerare l'ordine medio:
+
+```{r}
+
+df.rk.name.with.mean <- df.rk.name %>% mutate(mean = (degree_centrality + betweeness_centrality + eigen_centrality + katz_centrality +
+         pagerank_centrality + authority_centrality) / 6)
+
+df.rk.name.with.mean %>% select(name, mean) %>% arrange(mean)
+
+ggplot(df.rk.name.with.mean) +
+  geom_histogram(aes(x = mean), col="black", fill="lightblue", binwidth = 20)  +
+  labs(title = "Distribuzione delle posizioni mediate") +
+  ylab("Conteggi") + 
+  xlab("Posizione mediata") 
+
+```
+
+Si può osservare come la distribuzione non risulti più uniforme. Visualizziamo i nodi più importanti nella rete basandoci su questa proprietà:
+
+```{r}
+game.game.graph.subgraph.sharedUserbase <- to_subgraph(game.game.graph %>% inner_join(df.rk.name.with.mean, by=c("name")) , mean < 500, subset_by = "nodes")$subgraph
+game.game.graph.subgraph.sharedUserbase <- to_subgraph(game.game.graph.subgraph.sharedUserbase , sharedUserbase > 75, subset_by = "edges")$subgraph
+game.game.graph.subgraph.sharedUserbase
+
+ggraph(game.game.graph.subgraph.sharedUserbase, layout="kk") + 
+  geom_edge_link(alpha = 0.1, col="lightgray") +
+  geom_node_point(aes(filter = degree(game.game.graph.subgraph.sharedUserbase)>=1, size=log(510-mean), color=log(totalGameTime))) +
+  geom_node_label(aes(filter = mean < 10, label = name), color = "black", size = 2.5, repel=TRUE ) +
+  labs(title = "Rete giochi/giochi per utenza condivisa, nodi centrali", size = "Centrality") 
+```
+
+### Potere
+
+Oltre alla centralità valutamo anche il potere dei nodi connessi alla rete. Nodi potenti avranno un'utenza particolarmente diversificata, elemento che potrebbe
+essere sfruttato nell'ambito del reccomender system per fare delle "scommesse sicure". Perturbiamo le matrici dei pesi in modo da avere grafi regolarizzabili (per
+la convergenza della procedura per il calcolo del potere):
+
+```{r}
+A <- as_adjacency_matrix(game.game.graph, attr="sharedUserbase")
+eI <- diag(0.0001,vcount(game.game.graph))
+games.games.power <- power_utils(A+eI,6)$vector
+
+# Esempio sui dati precedenti
+A <- as_adjacency_matrix(game.game.graph.subgraph.sharedUserbase, attr="sharedUserbase")
+eI <- diag(0.01,vcount(game.game.graph.subgraph.sharedUserbase))
+games.games.power.subgraph <- power_utils(A+eI,6)$vector
+
+ggraph(game.game.graph.subgraph.sharedUserbase %>% mutate(pow = games.games.power.subgraph),
+       layout="kk") + 
+  geom_edge_link(alpha = 0.1, col="lightgray") +
+  geom_node_point(aes(filter = degree(game.game.graph.subgraph.sharedUserbase)>=1, size=pow, color=log(totalGameTime))) +
+  geom_node_label(aes(filter = pow > 2, label = name), color = "black", size = 2.5, repel=TRUE ) +
+  labs(title = "Rete giochi/giochi per utenza condivisa, potere", size = "Power")
+```
+
+I risultati non sembrano discostarsi molto da quelli delle altre misure di centralità. Valutazioni riguardanti la similarità fra i nodi verranno
+effettuate in seguito.
+
+## Cluster e comunità
+
+Ci si potrebbe chiedere che ruolo abbiano le tag principali nella formazione di cluster all'interno del grafo dell'utenza condivisa. 
+
+```{r}
+
+g <- to_subgraph(game.game.graph.subgraph.sharedUserbase, degree(game.game.graph.subgraph.sharedUserbase)>=1, subset_by = "nodes")$subgraph
+
+visualize <- function(comm){
+  print(modularity(comm))
+
+  ggraph(g, layout = "fr") + 
+    geom_edge_link(alpha = 0.1, col="lightgray") +
+    geom_node_point(aes( col = as.factor(comm$membership))) +
+    geom_node_label(aes(filter = mean < 10, label = name), color = "black", size = 2.5, repel=TRUE ) +
+    labs(title = "Rete giochi/giochi per utenza condivisa, cluster nodi principali", col = "Cluster", size="Power")
+}
+
+visualize(cluster_fast_greedy(as.undirected(g)))
+visualize(cluster_louvain(as.undirected(g)))
+visualize(cluster_walktrap(as.undirected(g)))
+visualize(cluster_edge_betweenness(as.undirected(g)))
+
+```
+
+Valutiamo ora gli algoritmi sul grafo non ridotto:
+
+```{r}
+modularity(cluster_fast_greedy(as.undirected(game.game.graph)))
+modularity(cluster_louvain(as.undirected(game.game.graph)))
+modularity(cluster_walktrap(as.undirected(game.game.graph)))
+#ignoraiamo edge betweeness in quanto troppo lento
+#modularity(cluster_edge_betweenness(as.undirected(game.game.graph)))
+```
+
+il metodo `cluster_louvain` è quello che restituisce la migliore modularità. Proviamo a usare le tag di genere per creare una diversa clusterizzazione:
+
+```{r}
+genres.tags <- c("Action", "Adventure", "Casual", "Racing", "RPG", "Sports", "Strategy") 
+sel <- as.data.frame(genres.tags)
+colnames(sel)<-c("genres")
+
+cluster <- map(as_data_frame(game.game.graph, what = "vertices")[,"steamspy_tags"], function(x){ intersect(genres.tags,x) })
+
+game.game.tag.clustered <- game.game.graph %>%
+  mutate(cluster = unlist(map(cluster, ~ paste(.,collapse = ", ")))) %>%
+  mutate(cluster_ids = as.numeric(as.factor(cluster)))
+
+tag.communities <- make_clusters(as.undirected(game.game.tag.clustered), 
+                                 membership = (game.game.tag.clustered %>% as_data_frame(what = "vertices"))$cluster_ids,
+                                 modularity = TRUE)
+
+modularity(tag.communities)
+```
+
+Si osserva che questa tecnica porta ad avere una modularità piuttosto bassa. Concentriamoci quindi sui cluster ottentui con la metodologia `cluster_louvain`.
+Proviamo ad osservare come sono distribuite le tag tra i cluster:
+
+```{r}
+comm <- cluster_louvain(as.undirected(game.game.graph))
+
+ggplot(game.game.graph %>% as_data_frame(what = "vertices") %>%
+         mutate(cluster = comm$membership) %>% unnest(steamspy_tags) %>% 
+         filter.by.tag.or(steamspy_tags, genres.tags) ) +
+  geom_bar(aes(x=steamspy_tags, fill=as.factor(cluster)), position = "fill", color="black") +
+  labs(title = "Distribuzione clusters per tag ", fill="Cluster") +
+  ylab("Frequenze") + 
+  xlab("Tags")
+  
+```
+
+I cluster principali sembrano trasversali per le categorie, altri minori, come il 16, mostrano una certa dipendenza. Questo probabilmente giustifica anche gli 
+scarsi risultati ottenuti usando le tags per clusterizzare.
+
+Per concludere, modifichiamo il grafo della userbase condivisa, in modo che contenga tutte le informazioni che abbiamo calcolato:
+
+```{r}
+metacritic.data
+
+game.game.graph.final <- game.game.graph %>% activate(nodes) %>%
+  inner_join(df.rk.name.with.mean, by = c("name")) %>% rename(avg_centrality_order = mean) %>%
+  mutate(cluster = comm$memberhip, pow=games.games.power) %>% select(-centrality,-is_game) %>%
+  left_join(metacritic.data %>% select(-release_date, -players), by=c("name")) %>%
+  # nel caso in cui non siano disponibili sufficienti dati da metacritic uso le valutazioni di Steam
+  # nel caso anche quelle non siano presenti, assegno una sufficienza
+  mutate(estimated_userscore = ifelse(positive_ratings+negative_ratings == 0, 60,
+    positive.ratio.to.mark(100*positive_ratings/(positive_ratings+negative_ratings)))) %>% 
+  # altri dati utili ottenuti dalle attività dei 200.000 giocatori
+  inner_join(players.buy %>% group_by(name) %>% summarise(n=n()) %>% rename(buyers = n) %>% select(name,buyers), by=c("name")) %>%
+  inner_join(players.play %>% group_by(name) %>% summarise(n=n()) %>% rename(players = n) %>% select(name,players), by=c("name")) %>%
+  inner_join(players.play %>% group_by(name) %>% summarise(n=sum(time)) %>% rename(totalTime = n) %>% select(name,totalTime), by=c("name")) %>%
+  inner_join(players.play %>% group_by(name) %>% summarise(n=mean(time)) %>% rename(avgTime = n) %>% select(name,avgTime), by=c("name")) 
+
+game.game.graph.final
+game.game.graph.final %>% as_data_frame(what = "vertices")
+
+```
+
+## Sistema di consiglio dei giochi
+
+In questa ultima sezione, sfrutteremo tutte le informazioni estratte durante le precedenti analisi e le utilizzeremo per costruire un "reccomender system" per i giochi
+Steam presenti nel dataset dei 200.000 giocatori. Come base per questo sistema utilizzeremo il grafo dell'utenza condivisa presentato nell'ultima sezione.
+
+L'approccio che utilizzeremo per calcolare i giochi consigliati sarà basato su un sistema a punteggio parametrico, volto a stimare l'importanza dei diversi 
+aspetti affrontati durante l'analisi. Inoltre, per personalizzare i consigli, ci aspettiamo di avere a disposizione una lista dei giochi giocati dall'utente.
+
+Per valutare la similarità fra i nodi rappresentanti i giochi giocati e quelli non giocati ci baseremo su due aspetti: la similarità per la struttura del grafo e 
+la correlazione fra le tag. Per la prima valuteremo la *cosine similarity*, per la seconda costruiremo un sistema di punteggio basato sull'agreement delle tag
+di genere di Steam unito a un sistema di riduzione esponenziale dello score in funzione della distanza sul grafo. 
+
+```{r}
+# impiega 1-2 minuti
+A <- as_adjacency_matrix(game.game.graph.final, sparse = FALSE)
+
+# diretta dalla definizione
+sim <- A / sqrt(rowSums(A * A))
+sim <- sim %*% t(sim)
+
+cosine.similarity.matrix <- sim
+```
+
+Qui è illustrato un esempio molto semplice per il calcolo della seconda similarità.
+
+```{r}
+# numero di nodi
+k <- 4
+# numero di tag da simulare
+bl <- 4
+# adj matrix
+A <- as_adjacency_matrix(erdos.renyi.game(k,0.6), sparse = FALSE)
+A
+# tag matrix
+M <- matrix( rbernoulli(bl*k), ncol = bl )
+M
+# matrice per la computazione delle similarità
+S <- matrix(rep(0, times=k^2), ncol=k)
+S
+# vettore di inizializzazione
+# a zero se non l'elemento di partenza
+# per l'esplorazione del grafo
+ini <- rep(0,times=ncol(A))
+ini[1] <- 1
+ini
+# tabella dell'agreement (precalcolata per motivi di efficienza)
+COVD <- compute.bitcor(M)
+COVD
+# computazione
+# esplorazione a partire dal solo nodo 1 (unico gioco considerato giocato)
+exp.corr.similarity.iter(A, 1, S, 4, ini, COVD)
+```
+
+Caso reale:
+
+```{r}
+A <- as_adjacency_matrix(game.game.graph.final, sparse = FALSE)
+
+genre.labels <- game.game.graph.final %>% as_data_frame(what = "vertices") %>% select(genres)
+genre.labels.uniques <- (genre.labels %>% unnest(genres) %>% unique())$genres
+
+tag.bitsets <- matrix(unlist(map(genre.labels$genres, function(x) map_lgl(genre.labels.uniques, function(y) y %in% x ))),
+                      byrow=TRUE, ncol = length(genre.labels.uniques))
+
+Sim_matrix <- matrix(rep(0, times=nrow(tag.bitsets)^2), ncol=nrow(tag.bitsets))
+```
+
+Il calcolo della matrice degli agreement anticipato permette di ridurre notevolmente il tempo di esecuzione dell'algoritmo, cosa fondamentale in quanto  l'analisi
+dovrà poter essere eseguita in un ambiente reattivo:
+
+```{r}
+# sono molte operazioni
+#COV <- compute.bitcor(tag.bitsets)
+#COV[1:10,1:10]
+# reimplementato in C++
+COV <- compute_bitcor_CPP(tag.bitsets)
+COV[1:10,1:10]
+```
+
+procediamo con il calcolo della metrica, sfruttando visite multiple in profondità:
+
+```{r}
+sel <- c(1,10,100,200,300,400,500,600,2000)
+for(i in sel){
+  ini <- rep(0,times=ncol(A))
+  ini[i] <- 1
+  Sim_matrix <- exp.corr.similarity.iter(A, i, Sim_matrix, 10, ini, COV)
+}
+Sim_matrix[1:10,1:10]
+affinities <- mean.of.positives(Sim_matrix)
+affinities[1:10]
+```
+
+Svolto in modo diretto:
+
+```{r}
+get.affinity(game.game.graph.final, sel, COV, 10)[1:10]
+```
+
+Oltre a questa strategia basata sulla similarità delle tag, possiamo inidividuare la similarità fra i diversi nodi sfruttando la quantità di utenti condivisi (a uno o più step).
+Calcoliamo, per semplicità, la metrica in modo simile alla precedente, utenti che giocano a più giochi legati fra loro
+saranno considerati più volte, ma è anche più forte il loro ruolo nella relazione di condivisione degli utenti.
+Il "flusso" dei giocatori viene propagato dimezzando ad ogni passo l'importanza sia dei collegamenti sia flusso ottenuto precedentemente, in modo 
+che nodi vicini altamente collegati siano avvantaggiati.
+
+```{r}
+W <- game.game.graph.final %>% activate(edges) %>%
+  as_data_frame() %>%
+  mutate(from_id = as_edgelist(game.game.graph.final,names=FALSE)[,1], 
+                               to_id = as_edgelist(game.game.graph.final,names=FALSE)[,2]) %>%
+  select(from_id,to_id,sharedUserbase)
+
+W <- as.matrix(W,ncol=3)
+```
+
+Implementiamo la funzione in C++ per necessità di efficienza: 
+
+```{r}
+compute_shared_userbase_similarity(A,W,ncol(A),sel)[1:10]
+```
+
+Questa è la riga di codice C++ che determina il calcolo del flusso ad ogni passo. L'operazione è ripetuta per ogni nodo (gioco) della selezione.
+
+```
+flow[destination] += flow[source]/2 + W->at(source)->at(destination)/(pow(2,iter));
+```
+
+Infine impacchettiamo i risultati in un file .rds, in modo da ridurre il numero di operazioni necessarie nell'applicazione Shiny associata a questa 
+realzione che calcolerà i giochi consigliati.
+
+```{r}
+save(game.game.graph.final, COV, A, W, cosine.similarity.matrix, file="precomputed.rds")
+```
+
+
+### Strategia per la generazione dei consigli
+
+Ricapitolando, verranno valutate e unite le caratteristiche dei giochi relative ai seguenti aspetti:
+
+1. Flusso di giocatori verso altri giochi
+* Centralità e potenza nella rete
+* Correlazione sul bitset dei generi
+* Similarità con altri nodi della rete
+* Valutazioni dei critici e stime
+* Valutazioni degli utenti
+* Costo e tempo medio di gioco
+* Dimensione dell'utenza
+
+Si noti come le prime tre metriche dipendano dalla rete, mentre le ultime 4 ne siano indipendenti. E' complesso determinare quali aspetti siano 
+effettivamente i più rilevanti, terremo conto di tutti medieremo i consigli sulla base di parametri modificabili dall'utente. Per fare ciò valuteremo
+l'ordine per ogni singolo aspetto e uniremo i risultati con una media pesata su questi ordinamenti.
+
+Quindi:
+
+```{r}
+# Input
+sel <- c(1, 10, 100, 200, 300, 400, 500, 600, 2000)
+
+mean.cosine <- cosine.set.similarity(sel, cosine.similarity.matrix)
+
+# Dati
+# game.game.graph.final
+# COV
+# A e W
+affinity <- get.affinity(game.game.graph.final, sel, COV, 10)
+flow <- compute_shared_userbase_similarity(A, W, ncol(A), sel)
+
+ngames <- length(V(game.game.graph.final))
+
+base <-
+  game.game.graph.final %>% 
+  as_data_frame(what = "vertices") %>%
+  mutate(order_id = 1:ngames)
+
+affinity.order <-
+  base %>% mutate(affinity = affinity) %>% 
+  select(affinity, order_id) %>% arrange(desc(affinity)) %>%
+  select(order_id) %>% 
+  mutate(aff.rk = 1:ngames)
+
+centrality.order <-
+  base %>% select(avg_centrality_order, order_id) %>% 
+  arrange(desc(avg_centrality_order)) %>%
+  select(order_id) %>% 
+  mutate(cen.rk = 1:ngames)
+
+power.order <-
+  base %>% select(pow, order_id) %>%
+  arrange(desc(pow)) %>% 
+  select(order_id) %>%
+  mutate(pow.rk = 1:ngames)
+
+critic.order <-
+  base %>% select(metascore, estimated_userscore, order_id) %>% 
+  mutate(critic = ifelse(is.na(metascore), estimated_userscore, metascore)) %>%
+  arrange(desc(critic)) %>%
+  select(order_id) %>%
+  mutate(critic.rk = 1:ngames)
+
+userscore.order <-
+  base %>% select(positive_ratings, negative_ratings, order_id) %>%
+  mutate(userscore = ifelse(
+    positive_ratings + negative_ratings > 10,
+    positive_ratings / (positive_ratings + negative_ratings),
+    0.60
+  )) %>%
+  arrange(desc(userscore), desc(positive_ratings + negative_ratings)) %>%
+  select(order_id) %>%
+  mutate(user.rk = 1:ngames)
+
+value.order <-
+  base %>% select(avgTime, price, order_id) %>%
+  mutate(value = avgTime / max(price, 1)) %>%
+  arrange(desc(value)) %>%
+  select(order_id) %>%
+  mutate(value.rk = 1:ngames)
+
+userbase.order <- 
+  base %>% select(players, order_id) %>%
+  arrange(desc(players)) %>%
+  select(order_id) %>% 
+  mutate(userbase.rk = 1:ngames)
+
+flow.order <-
+  base %>% mutate(flow = flow) %>%
+  select(flow, order_id) %>% 
+  arrange(desc(flow)) %>%
+  select(order_id) %>%
+  mutate(flow.rk = 1:ngames)
+
+cosine.order <-
+  base %>% mutate(mean.cosine = mean.cosine) %>%
+  select(mean.cosine, order_id) %>%
+  arrange(desc(mean.cosine)) %>% 
+  select(order_id) %>% 
+  mutate(cosine.rk = 1:ngames)
+
+rankings <- as.matrix(
+  (
+    base %>% select(order_id) %>% full_join(affinity.order, by = c("order_id")) %>%
+      full_join(centrality.order, by = c("order_id")) %>%
+      full_join(power.order, by = c("order_id")) %>%
+      full_join(critic.order, by = c("order_id")) %>%
+      full_join(userscore.order, by = c("order_id")) %>%
+      full_join(value.order, by = c("order_id")) %>%
+      full_join(userbase.order, by = c("order_id")) %>%
+      full_join(flow.order, by = c("order_id")) %>%
+      full_join(cosine.order, by = c("order_id"))
+  )[, 2:10]
+)
+
+aff.w <- 1 / 9
+cen.w <- 1 / 9
+pow.w <- 1 / 9
+critic.w <- 1 / 9
+user.w <- 1 / 9
+value.w <- 1 / 9
+userbase.w <- 1 / 9
+flow.w <- 1 / 9
+cosine.w <- 1 / 9
+
+ord.weights <-
+  c(aff.w,
+    cen.w,
+    pow.w,
+    critic.w,
+    user.w,
+    value.w,
+    userbase.w,
+    flow.w,
+    cosine.w)
+ord.weights <- ord.weights / sum(ord.weights)
+
+global.rank <-
+  apply(rankings, 1, function(x)
+    sum(x * ord.weights))
+
+base %>% mutate(final_rank = global.rank) %>% 
+  arrange(final_rank) %>%
+  select(name, final_rank)
+
+```
+
+
+## Conlusione
+
+Le analisi presentate mostrano come trattare dati acquisiti da piattaforme di videogiochi possa essere un problema interessante e mettono in luce l'enorme quantità di informazioni in essi racchiuse. Ci sono diversi aspetti di rilievo che non sono qui stati considerati, si pensi ad esempio al ruolo della classificazione per età ed il suo impatto sui giocatori e sui recensori, oppure alla possibilità di categorizzare gli utenti e di sfruttare questa informazione per il sistema per il consiglio dei giochi. Le analisi mostrate incentrano la loro complessità sul numero di giochi presenti sulla piattaforma considerata. Questo numero, seppur come abbiamo visto in aumento, non è così grande ed effettivamente consente una buona scalabilità delle soluzioni proposte. L'implementazione delle componenti ad alto costo computazionale in C++ aiuta, in questo contesto, a mantenere buono anche il tempo per il calcolo dei consigli. Per quanto riguarda la bontà delle raccomandazioni del sistema, questa è complessa da valutare in quanto alla fine basata sulle opinioni personali. 
+Sicuramente non tutte le configurazioni possibili dei paramentri generano liste dei consigli valide,
+in particolare perchè possono dipendere troppo da uno solo degli aspetti valutati.
+Avendo dati di altri giocatori, sarebbe possibile validare i consigli basandosi su un sottoinsieme dei giochi da loro giocati per poi osservare se questi inidichino poi giochi
+effettivamente acquistati o giocati. Questa tecnica permetterebbe di ottimizzare i parametri e di confrontare il sistema con altri. Un altro aspetto certamente rilevante e che sarebbe sa approfondire è la tecnica di unione delle diverse classifiche ottenute per ciascun aspetto. In questo contesto si è usata la media pesata in quanto semplice da realizzare, ma è possibile che diverse valutazioni delle classifiche siano in realtà più adatte, in particolare per quanto riguarda lo score attribuito dalla posizione in ciascuna classifica. 
+
+
+
+

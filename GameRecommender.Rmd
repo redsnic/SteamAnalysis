@@ -1,0 +1,299 @@
+---
+title: "GameRecommender" 
+author: "Nicolò Rossi"
+date: "4/8/2020"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(DT)
+library(visNetwork)
+library(networkD3)
+library("Rcpp")
+library("sets")
+library("rmarkdown")
+library("circlize")
+library('knitr')
+library("plyr")
+library('dplyr')
+library('ggplot2')
+library('igraph')
+library("purrr")
+library("ggraph")
+library("tidyr")
+library("tidygraph")
+library("rlang")
+library("netrankr")
+library("corrplot")
+library("lpSolve")
+library("lpSolveAPI")
+library("Rglpk")
+library("Rfast")
+source("Utils.R")
+sourceCpp("NetSimilarity.cpp")
+sourceCpp("bitcorr.cpp")
+knitr::opts_chunk$set(echo = TRUE, fig.align='center')
+```
+
+
+
+```{r, echo=FALSE}
+load(file="precomputed.rds")
+
+V.df <- game.game.graph.final %>% as_data_frame(what = "vertices")
+E.df <- game.game.graph.final %>% as_data_frame(what = "edges")
+
+rv <- reactiveValues()
+# default values
+rv$choosen_games <- c()
+rv$selected_nodes <- c()
+rv$best_nodes <- c()
+rv$all_selected_nodes <- c()
+
+rv$aff.w <- 1/9
+rv$cen.w <- 1/9
+rv$pow.w <- 1/9
+rv$critic.w <- 1/9
+rv$user.w <- 1/9
+rv$value.w <- 1/9
+rv$userbase.w <- 1/9
+rv$flow.w <- 1/9
+rv$cosine.w <- 1/9
+
+update_inputs <- function(){
+  rv$choosen_games <- input$choosen_games
+  rv$aff.w <- input$aff.w
+  rv$cen.w <- input$cen.w
+  rv$pow.w <- input$pow.w
+  rv$critic.w <- input$critic.w
+  rv$user.w <- input$user.w
+  rv$value.w <- input$value.w
+  rv$userbase.w <- input$userbase.w
+  rv$flow.w <- input$flow.w
+  rv$cosine.w <- input$cosine.w
+}
+
+observeEvent(input$loadData, { update_inputs() })
+
+observeEvent(input$aff.w, { adjust.sliders(1) })
+observeEvent(input$cen.w, { adjust.sliders(2) })
+observeEvent(input$pow.w, { adjust.sliders(3) })
+observeEvent(input$critic.w, { adjust.sliders(4) })
+observeEvent(input$user.w, { adjust.sliders(5) })
+observeEvent(input$value.w, { adjust.sliders(6) })
+observeEvent(input$userbase.w, { adjust.sliders(7) })
+observeEvent(input$flow.w, { adjust.sliders(8) })
+observeEvent(input$cosine.w, { adjust.sliders(9) })
+
+
+adjust.sliders <- function(i){
+  l <- c(input$aff.w, input$cen.w, input$pow.w, input$critic.w, 
+         input$user.w, input$value.w,input$userbase.w, input$flow.w, input$cosine.w) 
+  tot <- sum(l)-l[i]
+  for(j in 1:length(l)){
+    if(j!=i){
+      l[j] <- l[j]*(1-l[i])/tot
+    }
+  }
+  updateSliderInput(session,"aff.w", value = l[1])
+  updateSliderInput(session,"cen.w", value = l[2])
+  updateSliderInput(session,"pow.w", value = l[3])
+  updateSliderInput(session,"critic.w", value = l[4])
+  updateSliderInput(session,"user.w", value = l[5])
+  updateSliderInput(session,"value.w", value = l[6])
+  updateSliderInput(session,"userbase.w", value = l[7])
+  updateSliderInput(session,"flow.w", value = l[8])
+  updateSliderInput(session,"cosine.w", value = l[9])
+}
+
+
+```
+
+
+```{r eruptions, echo=FALSE}
+sidebarLayout(
+
+  sidebarPanel(
+    h4("Fine tune your prediction:"),
+    sliderInput("aff.w", "Genre similarity with the selected games:", min = 0, max = 1, value = 1/9, step = 0.001),
+    sliderInput("cen.w", "General importance (centrality):", min = 0, max = 1, value = 1/9, step = 0.001),
+    sliderInput("pow.w", "General importance (power):", min = 0, max = 1, value = 1/9, step = 0.001),
+    sliderInput("critic.w", "Critics review (or estimate):", min = 0, max = 1, value = 1/9, step = 0.001),
+    sliderInput("user.w", "User reviews:", min = 0, max = 1, value = 1/9, step = 0.001),
+    sliderInput("value.w", "Value (game time per dollar):", min = 0, max = 1, value = 1/9, step = 0.001),
+    sliderInput("userbase.w", "Userbase size:", min = 0, max = 1, value = 1/9, step = 0.001),
+    sliderInput("flow.w", "Closeness with the selected games (in term of shared userbase):", min = 0, max = 1, value = 1/9, step = 0.001),
+    sliderInput("cosine.w", "Network based similarity (based on cosine similarity):", min = 0, max = 1, value = 1/9, step = 0.001)
+  ),
+  
+  mainPanel(
+    selectInput(
+      "choosen_games",
+      label = "Choose the games you liked most:",
+      multiple = TRUE,
+      choices = V.df %>% select(name),
+      selected = 20,
+      width = "auto"
+    ),
+    
+    actionButton("loadData", "Recommend games!") %>% shiny::tagAppendAttributes(style = 'width: 100%;'),
+    
+    HTML('<br><br><br>'),
+    
+    renderDT({
+      
+      selected.games <- rv$choosen_games
+      
+      # Input
+      sel <-
+        map_int(selected.games, ~ which(. == (V.df %>% select(name))))
+      affinity <- get.affinity(game.game.graph.final, sel, COV, 10)
+      flow <- compute_shared_userbase_similarity(A, W, ncol(A), sel)
+      
+      mean.cosine <- cosine.set.similarity(sel,cosine.similarity.matrix)
+      
+      ngames <- length(V(game.game.graph.final))
+      
+      base <-
+        game.game.graph.final %>% as_data_frame(what = "vertices") %>% mutate(order_id = 1:ngames)
+      
+      affinity.order <-
+        base %>% mutate(affinity = affinity) %>% select(affinity, order_id) %>% arrange(desc(affinity)) %>% select(order_id) %>% mutate(aff.rk = 1:ngames)
+      
+      centrality.order <-
+        base %>% select(avg_centrality_order, order_id) %>% arrange(avg_centrality_order) %>% select(order_id) %>% mutate(cen.rk = 1:ngames)
+      
+      power.order <-
+        base %>% select(pow, order_id) %>% arrange(desc(pow)) %>% select(order_id) %>% mutate(pow.rk = 1:ngames)
+      
+      critic.order <-
+        base %>% select(metascore, estimated_userscore, order_id) %>% mutate(critic = ifelse(is.na(metascore), estimated_userscore, metascore)) %>%
+        arrange(desc(critic)) %>% select(order_id) %>% mutate(critic.rk = 1:ngames)
+      
+      userscore.order <-
+        base %>% select(positive_ratings, negative_ratings, order_id) %>%
+        mutate(userscore = ifelse(
+          positive_ratings + negative_ratings > 10,
+          positive_ratings / (positive_ratings + negative_ratings),
+          0.60
+        )) %>%
+        arrange(desc(userscore), desc(positive_ratings + negative_ratings)) %>% select(order_id) %>% mutate(user.rk = 1:ngames)
+      
+      value.order <- base %>% select(avgTime, price, order_id) %>%
+        mutate(value = avgTime / max(price, 1)) %>% arrange(desc(value)) %>% select(order_id) %>% mutate(value.rk = 1:ngames)
+      
+      userbase.order <- base %>% select(players, order_id) %>%
+        arrange(desc(players)) %>% select(order_id) %>% mutate(userbase.rk = 1:ngames)
+      
+      flow.order <-
+        base %>% mutate(flow = flow) %>% select(flow, order_id) %>% arrange(desc(flow)) %>% select(order_id) %>% mutate(flow.rk = 1:ngames)
+      
+      cosine.order <- 
+        base %>% mutate(mean.cosine = mean.cosine) %>% select(mean.cosine, order_id) %>% arrange(desc(mean.cosine)) %>% select(order_id) %>% mutate(cosine.rk = 1:ngames)
+      
+      rankings <- as.matrix(
+        (
+          base %>% select(order_id) %>% full_join(affinity.order, by = c("order_id")) %>%
+            full_join(centrality.order, by = c("order_id")) %>%
+            full_join(power.order, by = c("order_id")) %>%
+            full_join(critic.order, by = c("order_id")) %>%
+            full_join(userscore.order, by = c("order_id")) %>%
+            full_join(value.order, by = c("order_id")) %>%
+            full_join(userbase.order, by = c("order_id")) %>%
+            full_join(flow.order, by = c("order_id")) %>%
+            full_join(cosine.order, by = c("order_id"))
+        )[, 2:10]
+      )
+      
+      aff.w <- rv$aff.w 
+      cen.w <- rv$cen.w
+      pow.w <- rv$pow.w 
+      critic.w <- rv$critic.w
+      user.w <- rv$user.w 
+      value.w <- rv$value.w 
+      userbase.w <- rv$userbase.w 
+      flow.w <- rv$flow.w 
+      cosine.w <- rv$cosine.w
+      
+      ord.weights <-
+        c(ifelse(length(selected.games)>0,aff.w,0),
+          cen.w,
+          pow.w,
+          critic.w,
+          user.w,
+          value.w,
+          userbase.w,
+          ifelse(length(selected.games)>0,flow.w,0),
+          ifelse(length(selected.games)>0,cosine.w,0))
+      ord.weights <- ord.weights / sum(ord.weights)
+      #ord.weights
+      
+      global.rank <-
+        apply(rankings, 1, function(x)
+          sum(x * ord.weights))
+      
+      ans <- base %>% mutate(final_rank = global.rank) %>% arrange(final_rank) %>% select(name, final_rank) 
+      if(length(selected.games) > 0){
+        ans <- anti_join(ans, data.frame(name=selected.games), by=c("name"))
+      }
+      
+      rv$selected_nodes <- selected.games 
+      rv$best_nodes <- (ans %>% head(15) %>% select(name))$name
+      rv$all_selected_nodes <- c(rv$selected_nodes,rv$best_nodes)
+      
+      ans %>% datatable(options = list(pageLength = 23))
+    })
+  )
+)
+
+h3("Circos visualizzation (requires some selected games)")
+
+renderPlot({
+  circos.clear()
+  
+  if(length(rv$selected_nodes>0)){
+    g <- to_subgraph(game.game.graph.final, name %in% rv$all_selected_nodes, subset_by = "nodes")$subgraph
+    e <- g %>% as_data_frame(what = "edges") %>% select(from,to,sharedUserbase) %>% rename(weight=sharedUserbase)
+    g <- to_subgraph(g, ((e$from %in% rv$selected_nodes) & (e$to %in% rv$best_nodes)) , subset_by = "edges")$subgraph
+    e <- g %>% as_data_frame(what = "edges") %>% select(from,to,sharedUserbase) %>% rename(weight=sharedUserbase)
+    group <- c(rep(0,times=(length(rv$selected_nodes))), rep(1,times=length(rv$best_nodes)))
+    names(group) <- c(rv$all_selected_nodes)
+    col <- c(rep("green",times=(length(rv$selected_nodes))), rep("blue",times=length(rv$best_nodes)))
+    names(col) <- c(rv$all_selected_nodes)
+    chordDiagram(e,  symmetric = TRUE, annotationTrack = "grid", preAllocateTracks = 1, group=group, scale=TRUE)
+    
+    good.names <- (g %>% as_data_frame(what = "vertices") %>% arrange(desc(players)) %>% select(name))$name
+    good.names <- c(rv$selected_nodes,good.names)
+    
+    
+    circos.trackPlotRegion(
+      track.index = 1,
+      panel.fun = function(x, y) {
+        xlim = get.cell.meta.data("xlim")
+        ylim = get.cell.meta.data("ylim")
+        sector.name = ifelse(
+          get.cell.meta.data("sector.index") %in% good.names,
+          gsub(" ", "\n", get.cell.meta.data("sector.index")) ,
+          ""
+        )
+        circos.text(
+          mean(xlim),
+          ylim[1] + .1,
+          sector.name,
+          facing = "clockwise",
+          niceFacing = TRUE,
+          adj = c(0, 0.5),
+          col = "black",
+          cex = 1
+        )
+      },
+      bg.border = NA
+    )
+  }
+  
+  circos.clear()
+}, height=1000, width=1000)
+
+
+```
