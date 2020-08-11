@@ -860,7 +860,7 @@ La distribuzione delle percentuali di valutazioni positive non è normale, qui v
   
 > "Star Wars Battlefront II" è stato ampliamente criticato dagli utenti in quanto il gioco proponeva una enorme quantità di "microtransazioni", in quel periodo
   infatti EA (non da sola) stava spingendo per introdurre delle metodologie legate ai software come servizio
-  (SaS) all'interno dei propri giochi, in quanto decisamente remunerative. Questo ha creato gradualmente una situazione di malcontento nei giocatori
+  (SaaS) all'interno dei propri giochi, in quanto decisamente remunerative. Questo ha creato gradualmente una situazione di malcontento nei giocatori
   che è letteralmente esplosa al lancio di questo gioco. Questa, per così dire, ribellione ha portato a un ridimensionamento notevole della
   quantità di microtransazioni nei giochi successivi. Ovviamente la situazione è molto complessa e articolata e necessiterebbe senza dubbio di 
   una trattazione molto più esaustiva che esula dalle finalità di questa relazione.
@@ -1881,7 +1881,7 @@ figures.g.g.avg.c
 ### Potere
 
 Oltre alla centralità valutiamo anche il potere dei nodi connessi alla rete. Nodi potenti avranno un'utenza particolarmente diversificata, elemento che potrebbe
-essere sfruttato nell'ambito del reccomender system per fare delle "scommesse sicure". Perturbiamo le matrici dei pesi in modo da avere grafi regolarizzabili (per
+essere sfruttato nell'ambito del recommender system per fare delle "scommesse sicure". Perturbiamo le matrici dei pesi in modo da avere grafi regolarizzabili (per
 la convergenza della procedura per il calcolo del potere):
 
 ```{r}
@@ -2011,7 +2011,7 @@ game.game.graph.final %>% as_data_frame(what = "vertices")
 
 ## Sistema di consiglio dei giochi
 
-In questa ultima sezione, sfrutteremo tutte le informazioni estratte durante le precedenti analisi e le utilizzeremo per costruire un "reccomender system" per i giochi
+In questa ultima sezione, sfrutteremo tutte le informazioni estratte durante le precedenti analisi e le utilizzeremo per costruire un "recommender system" per i giochi
 Steam presenti nel dataset dei 200.000 giocatori. Come base per questo sistema utilizzeremo il grafo dell'utenza condivisa presentato nell'ultima sezione.
 
 L'approccio che utilizzeremo per calcolare i giochi consigliati sarà basato su un sistema a punteggio parametrico, volto a stimare l'importanza dei diversi 
