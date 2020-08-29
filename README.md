@@ -7,3 +7,5 @@ Sono inoltre necessari almeno 12GB di memoria RAM (totale del sistema).
 A questo [link](https://redsnic.shinyapps.io/GameRecommender/) è disponibile una versione online del sistema per il consiglio dei giochi. 
 La versione gratuita di shinyapps.io fornisce solo 1GB di RAM (al limite per l'applicazione) ed è probabile venire quindi disconnessi dal server.
 Viene lasciata solo come riferimento per mostrare la possibilità di pubblicare le applicazioni Shiny.
+
+(E' stato aggiunto il file "precomputed.rds" che permette di eseguire l'applicazione Shiny direttamente, senza dover eseguire per forza l'analisi) 
