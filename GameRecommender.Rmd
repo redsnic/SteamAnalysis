@@ -29,7 +29,6 @@ library("corrplot")
 library("lpSolve")
 library("lpSolveAPI")
 library("Rglpk")
-library("Rfast")
 source("Utils.R")
 sourceCpp("NetSimilarity.cpp")
 sourceCpp("bitcorr.cpp")
@@ -148,8 +147,8 @@ sidebarLayout(
       # Input
       sel <-
         map_int(selected.games, ~ which(. == (V.df %>% select(name))))
-      affinity <- get.affinity(game.game.graph.final, sel, COV, 10)
-      flow <- compute_shared_userbase_similarity(A, W, ncol(A), sel)
+      affinity <- get.affinity(game.game.graph.final, sel, COV, 5)
+      flow <- compute_shared_userbase_similarity(A, W, ncol(A), sel, userbase)
       
       mean.cosine <- cosine.set.similarity(sel,cosine.similarity.matrix)
       
@@ -159,17 +158,29 @@ sidebarLayout(
         game.game.graph.final %>% as_data_frame(what = "vertices") %>% mutate(order_id = 1:ngames)
       
       affinity.order <-
-        base %>% mutate(affinity = affinity) %>% select(affinity, order_id) %>% arrange(desc(affinity)) %>% select(order_id) %>% mutate(aff.rk = 1:ngames)
+        base %>% mutate(affinity = affinity) %>% 
+        select(affinity, order_id) %>% arrange(desc(affinity)) %>%
+        rank.by.column(affinity,aff.rk) %>%
+        select(order_id, aff.rk) 
       
       centrality.order <-
-        base %>% select(avg_centrality_order, order_id) %>% arrange(avg_centrality_order) %>% select(order_id) %>% mutate(cen.rk = 1:ngames)
+        base %>% select(avg_centrality_order, order_id) %>% 
+        arrange(avg_centrality_order) %>%
+        rank.by.column(avg_centrality_order,cen.rk) %>%
+        select(order_id, cen.rk)
       
       power.order <-
-        base %>% select(pow, order_id) %>% arrange(desc(pow)) %>% select(order_id) %>% mutate(pow.rk = 1:ngames)
+        base %>% select(pow, order_id) %>%
+        arrange(desc(pow)) %>%
+        rank.by.column(pow,pow.rk) %>%
+        select(order_id, pow.rk)
       
       critic.order <-
-        base %>% select(metascore, estimated_userscore, order_id) %>% mutate(critic = ifelse(is.na(metascore), estimated_userscore, metascore)) %>%
-        arrange(desc(critic)) %>% select(order_id) %>% mutate(critic.rk = 1:ngames)
+        base %>% select(metascore, estimated_userscore, order_id) %>% 
+        mutate(critic = ifelse(is.na(metascore), estimated_userscore, metascore)) %>%
+        arrange(desc(critic)) %>%
+        rank.by.column(critic,critic.rk) %>%
+        select(order_id, critic.rk)
       
       userscore.order <-
         base %>% select(positive_ratings, negative_ratings, order_id) %>%
@@ -178,19 +189,37 @@ sidebarLayout(
           positive_ratings / (positive_ratings + negative_ratings),
           0.60
         )) %>%
-        arrange(desc(userscore), desc(positive_ratings + negative_ratings)) %>% select(order_id) %>% mutate(user.rk = 1:ngames)
+        arrange(desc(userscore)) %>%
+        rank.by.column(userscore,user.rk) %>%
+        select(order_id, user.rk)
       
-      value.order <- base %>% select(avgTime, price, order_id) %>%
-        mutate(value = avgTime / max(price, 1)) %>% arrange(desc(value)) %>% select(order_id) %>% mutate(value.rk = 1:ngames)
+      value.order <-
+        base %>% select(avgTime, price, order_id) %>%
+        mutate(value = avgTime / max(price, 1)) %>%
+        arrange(desc(value)) %>%
+        rank.by.column(value,value.rk) %>%
+        select(order_id, value.rk)
       
-      userbase.order <- base %>% select(players, order_id) %>%
-        arrange(desc(players)) %>% select(order_id) %>% mutate(userbase.rk = 1:ngames)
+      userbase.order <- 
+        base %>% select(players, order_id) %>%
+        arrange(desc(players)) %>%
+        rank.by.column(players,userbase.rk) %>%
+        select(order_id, userbase.rk)
       
       flow.order <-
-        base %>% mutate(flow = flow) %>% select(flow, order_id) %>% arrange(desc(flow)) %>% select(order_id) %>% mutate(flow.rk = 1:ngames)
+        base %>% mutate(flow = flow) %>%
+        select(flow, order_id) %>% 
+        arrange(desc(flow)) %>%
+        rank.by.column(flow,flow.rk) %>%
+        select(order_id, flow.rk)
       
-      cosine.order <- 
-        base %>% mutate(mean.cosine = mean.cosine) %>% select(mean.cosine, order_id) %>% arrange(desc(mean.cosine)) %>% select(order_id) %>% mutate(cosine.rk = 1:ngames)
+      cosine.order <-
+        base %>% mutate(mean.cosine = mean.cosine) %>%
+        select(mean.cosine, order_id) %>%
+        arrange(desc(mean.cosine)) %>% 
+        rank.by.column(mean.cosine,cosine.rk) %>%
+        select(order_id, cosine.rk)
+      
       
       rankings <- as.matrix(
         (

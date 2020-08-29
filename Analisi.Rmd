@@ -6,13 +6,13 @@ output:
   html_document: 
     df_print: paged
   pdf_document: default
----
+--- 
 
 # Introduzione
 
 In questo documento viene mostrata l'analisi di dati estratti dalla piattaforma per videogiochi "Steam" e di come sia possibile usarla
 per realizzare un sistema per il consiglio di nuovi giochi da giocare. 
-I dataset utilizzati sono disponibili pubblicamente e sono stati ottenuti dal sito [Kaggle](https://www.kaggle.com).
+I dataset utilizzati sono disponibili pubblicamente e sono stati ottenuti dal sito [Kaggle](https://www.kaggle.com). 
 
 Steam è la più grande piattafroma per giocare, pubblicare ed acquistare giochi per computer.
 Attiva dal 2003, conta milioni di utenti attivi e migliaia di titoli disponibili. E' amministrata dalla Valve Corporation, società che
@@ -60,7 +60,6 @@ library("corrplot")
 library("lpSolve")
 library("lpSolveAPI")
 library("Rglpk")
-library("Rfast")
 # sorgenti extra
 source("Utils.R")
 sourceCpp("NetSimilarity.cpp")
@@ -2091,11 +2090,12 @@ COV[1:10,1:10]
 procediamo con il calcolo della metrica, sfruttando visite multiple in profondità:
 
 ```{r}
+Sim_matrix <- matrix(rep(0, times=nrow(tag.bitsets)^2), ncol=nrow(tag.bitsets))
 sel <- c(1,10,100,200,300,400,500,600,2000)
 for(i in sel){
   ini <- rep(0,times=ncol(A))
   ini[i] <- 1
-  Sim_matrix <- exp.corr.similarity.iter(A, i, Sim_matrix, 10, ini, COV)
+  Sim_matrix <- exp.corr.similarity.iter(A, i, Sim_matrix, 5, ini, COV)
 }
 Sim_matrix[1:10,1:10]
 affinities <- mean.of.positives(Sim_matrix)
@@ -2105,14 +2105,12 @@ affinities[1:10]
 Svolto in modo diretto:
 
 ```{r}
-get.affinity(game.game.graph.final, sel, COV, 10)[1:10]
+get.affinity(game.game.graph.final, sel, COV, 5)[1:10]
 ```
 
 Oltre a questa strategia basata sulla similarità delle tag, possiamo individuare la similarità fra i diversi nodi sfruttando la quantità di utenti condivisi (a uno o più step).
 Calcoliamo, per semplicità, la metrica in modo simile alla precedente, utenti che giocano a più giochi legati fra loro
 saranno considerati più volte, ma è anche più forte il loro ruolo nella relazione di condivisione degli utenti.
-Il "flusso" dei giocatori viene propagato dimezzando ad ogni passo l'importanza sia dei collegamenti sia flusso ottenuto precedentemente, in modo 
-che nodi vicini altamente collegati siano avvantaggiati.
 
 ```{r}
 W <- game.game.graph.final %>% activate(edges) %>%
@@ -2127,20 +2125,24 @@ W <- as.matrix(W,ncol=3)
 Implementiamo la funzione in C++ per necessità di efficienza: 
 
 ```{r}
-compute_shared_userbase_similarity(A,W,ncol(A),sel)[1:10]
+# precalcolo della userbase 
+userbase <- (game.game.graph.final %>% as_data_frame(what = "vertices") %>%
+  select(name) %>% inner_join(games.nplayers,by=c("name")) %>% select(totalPlayers))[,1]  
+
+compute_shared_userbase_similarity(A,W,ncol(A),sel,userbase)[1:10]
 ```
 
-Questa è la riga di codice C++ che determina il calcolo del flusso ad ogni passo. L'operazione è ripetuta per ogni nodo (gioco) della selezione.
+Questa è la riga di codice C++ che determina il calcolo del flusso ad ogni passo. L'operazione è ripetuta in più visite, una per nodo selezionato.
 
 ```
-flow[destination] += flow[source]/2 + W->at(source)->at(destination)/(pow(2,iter));
+flow[destination] += flow[source]*(W->at(source)->at(destination)/userbase[source])/(pow(10,iter));
 ```
 
 Infine impacchettiamo i risultati in un file .rds, in modo da ridurre il numero di operazioni necessarie nell'applicazione Shiny associata a questa 
 relazione che calcolerà i giochi consigliati.
 
 ```{r}
-save(game.game.graph.final, COV, A, W, cosine.similarity.matrix, file="precomputed.rds")
+save(game.game.graph.final, COV, A, W, cosine.similarity.matrix, userbase, file="precomputed.rds")
 ```
 
 
@@ -2174,7 +2176,7 @@ mean.cosine <- cosine.set.similarity(sel, cosine.similarity.matrix)
 # COV
 # A e W
 affinity <- get.affinity(game.game.graph.final, sel, COV, 10)
-flow <- compute_shared_userbase_similarity(A, W, ncol(A), sel)
+flow <- compute_shared_userbase_similarity(A, W, ncol(A), sel, userbase)
 
 ngames <- length(V(game.game.graph.final))
 
@@ -2186,27 +2188,27 @@ base <-
 affinity.order <-
   base %>% mutate(affinity = affinity) %>% 
   select(affinity, order_id) %>% arrange(desc(affinity)) %>%
-  select(order_id) %>% 
-  mutate(aff.rk = 1:ngames)
+  rank.by.column(affinity,aff.rk) %>%
+  select(order_id, aff.rk) 
 
 centrality.order <-
   base %>% select(avg_centrality_order, order_id) %>% 
-  arrange(desc(avg_centrality_order)) %>%
-  select(order_id) %>% 
-  mutate(cen.rk = 1:ngames)
+  arrange(avg_centrality_order) %>%
+  rank.by.column(avg_centrality_order,cen.rk) %>%
+  select(order_id, cen.rk)
 
 power.order <-
   base %>% select(pow, order_id) %>%
-  arrange(desc(pow)) %>% 
-  select(order_id) %>%
-  mutate(pow.rk = 1:ngames)
+  arrange(desc(pow)) %>%
+  rank.by.column(pow,pow.rk) %>%
+  select(order_id, pow.rk)
 
 critic.order <-
   base %>% select(metascore, estimated_userscore, order_id) %>% 
   mutate(critic = ifelse(is.na(metascore), estimated_userscore, metascore)) %>%
   arrange(desc(critic)) %>%
-  select(order_id) %>%
-  mutate(critic.rk = 1:ngames)
+  rank.by.column(critic,critic.rk) %>%
+  select(order_id, critic.rk)
 
 userscore.order <-
   base %>% select(positive_ratings, negative_ratings, order_id) %>%
@@ -2215,36 +2217,36 @@ userscore.order <-
     positive_ratings / (positive_ratings + negative_ratings),
     0.60
   )) %>%
-  arrange(desc(userscore), desc(positive_ratings + negative_ratings)) %>%
-  select(order_id) %>%
-  mutate(user.rk = 1:ngames)
+  arrange(desc(userscore)) %>%
+  rank.by.column(userscore,user.rk) %>%
+  select(order_id, user.rk)
 
 value.order <-
   base %>% select(avgTime, price, order_id) %>%
   mutate(value = avgTime / max(price, 1)) %>%
   arrange(desc(value)) %>%
-  select(order_id) %>%
-  mutate(value.rk = 1:ngames)
+  rank.by.column(value,value.rk) %>%
+  select(order_id, value.rk)
 
 userbase.order <- 
   base %>% select(players, order_id) %>%
   arrange(desc(players)) %>%
-  select(order_id) %>% 
-  mutate(userbase.rk = 1:ngames)
+  rank.by.column(players,userbase.rk) %>%
+  select(order_id, userbase.rk)
 
 flow.order <-
   base %>% mutate(flow = flow) %>%
   select(flow, order_id) %>% 
   arrange(desc(flow)) %>%
-  select(order_id) %>%
-  mutate(flow.rk = 1:ngames)
+  rank.by.column(flow,flow.rk) %>%
+  select(order_id, flow.rk)
 
 cosine.order <-
   base %>% mutate(mean.cosine = mean.cosine) %>%
   select(mean.cosine, order_id) %>%
   arrange(desc(mean.cosine)) %>% 
-  select(order_id) %>% 
-  mutate(cosine.rk = 1:ngames)
+  rank.by.column(mean.cosine,cosine.rk) %>%
+  select(order_id, cosine.rk)
 
 rankings <- as.matrix(
   (

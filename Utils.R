@@ -152,8 +152,8 @@ similarity = function(g, type = "cosine", mode = "col" ) {
 
 # Esegue un passo di una visita BFS
 BFS.reachable <- function(current, A){
-    for(i in current){
-        if(i!=0){
+    for(i in 1:length(current)){
+        if(current[i]!=0){
             current <- as.numeric(current | A[i,])
         }
     }
@@ -220,7 +220,7 @@ mean.of.positives <- function(M){
                            cnt <- 0
                            for(i in l)
                                if(i>0) cnt <- cnt + 1
-                               ifelse(cnt>0,cnt,1)
+                           ifelse(cnt>0,cnt,1)
                        })
     total/positives
 }
@@ -304,4 +304,42 @@ cosine.set.similarity <- function(sel, cosine.similarity.matrix){
     }
     cosine
 }
+
+
+# classifica con supporto pari merito
+# Richiede che il df sia ordinato per score col (in qualche modo)
+rank.by.column <- function(df, score_col, order_col){
+    score_col <- enquo(score_col)
+    order_col <- enquo(order_col)
+    
+    df <- df %>% mutate(order_col = 1:nrow(df)) 
+    scores <- (df %>% select(!!score_col))[,1]
+    
+    if(nrow(df)>0){
+        n <- 1
+        block <- 0
+        df[1,quo_text(order_col)] <- n
+        for(i in 2:nrow(df)){
+            if( (is.na(scores[i]) && is.na(scores[i-1])) || 
+                (!is.na(scores[i]) && !is.na(scores[i-1]) && scores[i] == scores[i-1])){
+                df[i,quo_text(order_col)] <- n
+                block <- block + 1 
+            }else{
+                n <- n+block
+                block <- 0
+                n <- n+1
+                df[i,quo_text(order_col)] <- n
+            }
+        }
+    }
+    return(df)
+}
+
+
+
+
+
+
+
+
 

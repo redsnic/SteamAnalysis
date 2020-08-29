@@ -45,7 +45,6 @@ library("corrplot")
 library("lpSolve")
 library("lpSolveAPI")
 library("Rglpk")
-library("Rfast")
 library("DT")
 # sorgenti extra
 source("Utils.R")
@@ -73,7 +72,7 @@ dplyr, ggplot2, igraph
 purrr, ggraph, tidyr
 tidygraph, rlang, netrankr
 corrplot, lpSolve, lpSolveAPI
-Rglpk, Rfast, DT
+Rglpk, DT
 ```
 
 ## Dataset considerati 
